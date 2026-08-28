@@ -22,7 +22,9 @@
  * limitations under the License.
  */
 
-#include "moment_flow/moment_flow.hpp"
+#include "moment_flow/event_detector.hpp"
+
+#include <dua_qos_cpp/dua_qos.hpp>
 
 namespace moment_flow
 {
@@ -46,6 +48,7 @@ EventDetector::~EventDetector()
 
 void EventDetector::init_cgroups()
 {
+  cgroup_enable_ = dua_create_exclusive_cgroup();
   cgroup_event_packet_ = dua_create_exclusive_cgroup();
 }
 
@@ -90,6 +93,18 @@ void EventDetector::init_publishers()
   pub_iwe_ = dua_create_publisher<sensor_msgs::msg::Image>(
     "~/iwe_image",
     dua_qos::BestEffort::get_image_qos(1));
+}
+
+void EventDetector::init_service_servers()
+{
+  server_enable_ = dua_create_service_server<SetBool>(
+    "~/enable",
+    std::bind(
+      &EventDetector::callback_enable,
+      this,
+      std::placeholders::_1,
+      std::placeholders::_2),
+    cgroup_enable_);
 }
 
 } // namespace moment_flow

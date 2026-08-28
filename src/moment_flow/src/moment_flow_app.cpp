@@ -30,9 +30,10 @@
 #include <ros2_app_manager/ros2_app_manager.hpp>
 #include <ros2_signal_handler/ros2_signal_handler.hpp>
 
-#include <moment_flow/moment_flow.hpp>
+#include <moment_flow/event_detector.hpp>
 
-using namespace dua_app_management;
+using dua_app_management::ROS2AppManager;
+using dua_app_management::SignalHandler;
 
 int main(int argc, char ** argv)
 {

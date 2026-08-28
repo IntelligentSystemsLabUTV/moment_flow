@@ -3,12 +3,14 @@
  *
  * Maintains spatio-temporal moments per sensor cell and solves a
  * closed-form moment-domain surrogate of contrast maximization based on
- * anisotropic normal-projected dispersion. A legacy structure-tensor solve is
- * still used internally as a stable fallback. The output field uses the same
- * convention as the previous dense-flow publisher:
- * F[2*k], F[2*k+1] are warp parameters in x' = x + t * F.
+ * anisotropic normal-projected dispersion. An isotropic solve over the same
+ * moments runs first at every scale and seeds it as a stable fallback. The
+ * output field follows the warp convention x' = x + t * F, with F[2*k] and
+ * F[2*k+1] the two components of tile k.
  *
  * dotX Automation s.r.l. <info@dotxautomation.com>
+ *
+ * August 28, 2026
  */
 
 /**
@@ -27,13 +29,12 @@
  * limitations under the License.
  */
 
-#pragma once
-
-#include <cmath>
-#include <cstdint>
+#include "moment_flow/moment_flow_solver.hpp"
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cstdint>
 #include <limits>
 #include <vector>
 
@@ -41,42 +42,10 @@
 #include <omp.h>
 #endif
 
-#include <Eigen/Core>
-
 namespace moment_flow::flow
 {
 
-/// Events for one window: pixel coords and time relative to t_ref_us [s].
-struct Events
-{
-  std::vector<float> x;
-  std::vector<float> y;
-  std::vector<float> t;
-  int64_t t_ref_us = 0;
-
-  size_t size() const { return x.size(); }
-};
-
-struct MomentFlowParams
-{
-  int num_scales = 1;
-  int cell_size_px = 16;
-  float cell_min_mass = 3.0f;
-  float cell_min_lambda = 1e-3f;
-  float cell_max_residual_ratio = 0.6f;
-  float tile_min_mass = 10.0f;
-  int tile_min_cells = 3;
-  float tile_min_lambda = 1e-6f;
-  float aperture_ratio = 0.05f;
-  float tikhonov_eps = 1e-3f;
-  float prior_lambda = 0.05f;
-  float flow_reg_lambda = 0.0f;
-  int flow_reg_sweeps = 0;
-  float flow_reg_sigma = 1e9f;
-  float max_speed_px_s = 4000.0f;
-};
-
-inline bool operator==(const MomentFlowParams & a, const MomentFlowParams & b)
+bool operator==(const MomentFlowParams & a, const MomentFlowParams & b)
 {
   return a.num_scales == b.num_scales &&
          a.cell_size_px == b.cell_size_px &&
@@ -95,37 +64,6 @@ inline bool operator==(const MomentFlowParams & a, const MomentFlowParams & b)
          a.max_speed_px_s == b.max_speed_px_s;
 }
 
-inline bool operator!=(const MomentFlowParams & a, const MomentFlowParams & b)
-{
-  return !(a == b);
-}
-
-struct MomentFlowProfile
-{
-  int events_ingested = 0;
-  int active_cells = 0;
-  int valid_cells = 0;
-  int residual_reject_cells = 0;
-  int speed_reject_cells = 0;
-  int full_rank_tiles = 0;
-  int aperture_tiles = 0;
-  int fallback_tiles = 0;
-  int prior_tiles = 0;
-  int final_full_rank_tiles = 0;
-  int final_aperture_tiles = 0;
-  int final_fallback_tiles = 0;
-  int reg_total_tiles = 0;
-  int reg_modified_tiles = 0;
-  int reg_legacy_geometry_tiles = 0;
-  int reg_warped_geometry_tiles = 0;
-  double reg_mean_delta_speed = 0.0;
-  double ingest_ms = 0.0;
-  double stage_a_ms = 0.0;
-  double stage_b_ms = 0.0;
-  double smooth_ms = 0.0;
-  double total_solve_ms = 0.0;
-};
-
 struct alignas(64) CellMoments
 {
   float w = 0.0f;
@@ -143,10 +81,10 @@ struct alignas(64) CellMoments
 static_assert(alignof(CellMoments) == 64, "CellMoments must be cache-line aligned");
 static_assert(sizeof(CellMoments) == 64, "CellMoments must occupy one cache line");
 
-class MomentFlow
+class MomentFlow::Impl
 {
 public:
-  MomentFlow(int img_w, int img_h, MomentFlowParams params)
+  Impl(int img_w, int img_h, MomentFlowParams params)
   : img_w_(img_w),
     img_h_(img_h),
     params_(sanitize_params(params)),
@@ -183,7 +121,6 @@ public:
       scale_fields_.push_back(Eigen::VectorXf(2 * tiles * tiles));
       scale_fallback_.push_back(Eigen::VectorXf(2 * tiles * tiles));
     }
-
   }
 
   bool compatible(int img_w, int img_h, const MomentFlowParams & params) const
@@ -191,7 +128,6 @@ public:
     return img_w_ == img_w && img_h_ == img_h && params_ == sanitize_params(params);
   }
 
-  int final_tiles() const { return final_tiles_; }
   int num_vars() const { return final_vars_; }
   const MomentFlowProfile & profile() const { return profile_; }
 
@@ -200,20 +136,17 @@ public:
   /// does not damp the correction steps (which would leave a systematic
   /// magnitude deficit after few iterations).
   void set_prior_scale(float s) { prior_scale_ = std::max(0.0f, s); }
-  float prior_scale() const { return prior_scale_; }
 
   /// Runtime multiplier on the cell/tile mass gates. The gates are calibrated
   /// in raw event counts; when a busy window is strided down, scale them by
   /// the kept fraction so acceptance does not depend on the event rate.
   void set_mass_scale(float s) { mass_scale_ = std::clamp(s, 1e-3f, 1.0f); }
-  float mass_scale() const { return mass_scale_; }
 
   /// Threads for the per-event loops (accumulation, warping). 0 (the default)
   /// leaves the choice to the OpenMP runtime. Results do not depend on it: the
   /// work is partitioned so that every cell keeps the serial accumulation
   /// order, so any value yields bit-identical moments.
   void set_max_threads(int t) { max_threads_ = std::max(0, t); }
-  int max_threads() const { return max_threads_; }
 
   void reset()
   {
@@ -282,7 +215,6 @@ public:
     profile_.final_fallback_tiles = 0;
     profile_.reg_total_tiles = 0;
     profile_.reg_modified_tiles = 0;
-    profile_.reg_legacy_geometry_tiles = 0;
     profile_.reg_warped_geometry_tiles = 0;
     profile_.reg_mean_delta_speed = 0.0;
 
@@ -429,37 +361,20 @@ public:
   {
     const int n = final_tiles_ * final_tiles_;
     conf.resize(static_cast<size_t>(n));
-    if (tile_warp_geom_.size() >= static_cast<size_t>(n)) {
-      for (int k = 0; k < n; ++k) {
-        const TileWarpGeometry & g = tile_warp_geom_[static_cast<size_t>(k)];
-        const bool usable =
-          g.valid && std::isfinite(g.confidence) && g.confidence > 0.0f;
-        conf[k] = usable ? g.confidence : 0.0f;
-      }
-      return;
-    }
-
     for (int k = 0; k < n; ++k) {
-      const TileAccum & a = tile_accum_[static_cast<size_t>(k)];
-      float lmin = 0.0f, lmax = 0.0f;
-      eig2(a.mxx, a.mxy, a.myy, lmin, lmax);
-      conf[k] = (std::isfinite(lmin) && lmin > 0.0f) ? lmin : 0.0f;
+      const TileWarpGeometry & g = tile_warp_geom_[static_cast<size_t>(k)];
+      const bool usable =
+        g.valid && std::isfinite(g.confidence) && g.confidence > 0.0f;
+      conf[k] = usable ? g.confidence : 0.0f;
     }
   }
 
 private:
-#ifdef MOMENT_FLOW_CPP_MOMENT_FLOW_TEST_ACCESS
-  friend struct MomentFlowTestAccess;
-#endif
-
   struct CellFit
   {
     float gx = 0.0f;
     float gy = 0.0f;
     float rho = 0.0f;
-    float sc = 0.0f;
-    float dx = 0.0f;
-    float dy = 0.0f;
   };
 
   struct TileAccum
@@ -496,18 +411,9 @@ private:
   struct TileWarpGeometry
   {
     bool valid = false;
-    float cov_xx = 0.0f;
-    float cov_xy = 0.0f;
-    float cov_yy = 0.0f;
-    float lmin = 0.0f;
-    float lmax = 0.0f;
     float tangent_x = 1.0f;
     float tangent_y = 0.0f;
-    float normal_x = 0.0f;
-    float normal_y = 1.0f;
-    float mass = 0.0f;
     float confidence = 0.0f;
-    float focus_phi = 0.0f;
     float data_mxx = 0.0f;
     float data_mxy = 0.0f;
     float data_myy = 0.0f;
@@ -768,54 +674,6 @@ private:
     return std::isfinite(x) && std::isfinite(y);
   }
 
-  struct Cholesky3
-  {
-    double l00 = 0.0, l10 = 0.0, l20 = 0.0;
-    double l11 = 0.0, l21 = 0.0, l22 = 0.0;
-  };
-
-  static bool factor3_spd(
-    double a00, double a01, double a02,
-    double a11, double a12, double a22,
-    Cholesky3 & f)
-  {
-    constexpr double eps = 1e-24;
-    if (!(a00 > eps) || !std::isfinite(a00)) {
-      return false;
-    }
-    f.l00 = std::sqrt(a00);
-    f.l10 = a01 / f.l00;
-    f.l20 = a02 / f.l00;
-
-    const double d11 = a11 - f.l10 * f.l10;
-    if (!(d11 > eps) || !std::isfinite(d11)) {
-      return false;
-    }
-    f.l11 = std::sqrt(d11);
-    f.l21 = (a12 - f.l20 * f.l10) / f.l11;
-
-    const double d22 = a22 - f.l20 * f.l20 - f.l21 * f.l21;
-    if (!(d22 > eps) || !std::isfinite(d22)) {
-      return false;
-    }
-    f.l22 = std::sqrt(d22);
-    return std::isfinite(f.l00) && std::isfinite(f.l11) && std::isfinite(f.l22);
-  }
-
-  static bool solve3_cholesky(
-    const Cholesky3 & f, double r0, double r1, double r2,
-    double & x0, double & x1, double & x2)
-  {
-    const double y0 = r0 / f.l00;
-    const double y1 = (r1 - f.l10 * y0) / f.l11;
-    const double y2 = (r2 - f.l20 * y0 - f.l21 * y1) / f.l22;
-
-    x2 = y2 / f.l22;
-    x1 = (y1 - f.l21 * x2) / f.l11;
-    x0 = (y0 - f.l10 * x1 - f.l20 * x2) / f.l00;
-    return std::isfinite(x0) && std::isfinite(x1) && std::isfinite(x2);
-  }
-
   static void dominant_eigenvector(
     float a, float b, float c, float lmax, float & ex, float & ey)
   {
@@ -913,9 +771,6 @@ private:
       fits_[k].gx = gx;
       fits_[k].gy = gy;
       fits_[k].rho = rho;
-      fits_[k].sc = sc;
-      fits_[k].dx = dx;
-      fits_[k].dy = dy;
       valid_cells += 1;
     }
 
@@ -1011,7 +866,7 @@ private:
     }
   }
 
-  /// One pyramid scale: legacy stable fallback, anisotropic solve, and the
+  /// One pyramid scale: isotropic stable fallback, anisotropic solve, and the
   /// coupled spatial regularizer. Shared by solve() and solve_coarse_to_fine().
   void solve_one_scale(int l, const Eigen::VectorXf & fallback, Eigen::VectorXf & field)
   {
@@ -1344,13 +1199,8 @@ private:
         if (static_cast<size_t>(k) < tile_warp_geom_.size()) {
           TileWarpGeometry geom;
           geom.valid = true;
-          geom.normal_x = nx;
-          geom.normal_y = ny;
           geom.tangent_x = tgx;
           geom.tangent_y = tgy;
-          geom.lmin = lminM;
-          geom.lmax = lmaxM;
-          geom.mass = static_cast<float>(a.mass);
           const float ratio = lminM / std::max(lmaxM, 1e-12f);
           const float data_conf = 0.5f * (lminM + lmaxM);
           const float normal_w = data_conf;
@@ -1358,7 +1208,6 @@ private:
             ? data_conf * std::max(0.0f, ratio)
             : data_conf;
           geom.confidence = data_conf;
-          geom.focus_phi = 1.0f + ratio;
           geom.data_mxx = normal_w * nx * nx + tangent_w * tgx * tgx;
           geom.data_mxy = normal_w * nx * ny + tangent_w * tgx * tgy;
           geom.data_myy = normal_w * ny * ny + tangent_w * tgy * tgy;
@@ -1380,34 +1229,11 @@ private:
     }
   }
 
-  const Eigen::VectorXf * fallback_for_tiles(int tiles) const
+  float tile_data_confidence(int k) const
   {
-    const int n = 2 * tiles * tiles;
-    for (const Eigen::VectorXf & fallback : scale_fallback_) {
-      if (fallback.size() == n) {
-        return &fallback;
-      }
-    }
-    return nullptr;
-  }
-
-  float tile_data_confidence(int k, bool use_warped_geometry) const
-  {
-    if (use_warped_geometry) {
-      if (static_cast<size_t>(k) >= tile_warp_geom_.size()) {
-        return 0.0f;
-      }
-      const TileWarpGeometry & g = tile_warp_geom_[static_cast<size_t>(k)];
-      if (g.valid && g.confidence > 0.0f && std::isfinite(g.confidence)) {
-        return g.confidence;
-      }
-      return 0.0f;
-    }
-
-    const TileAccum & a = tile_accum_[static_cast<size_t>(k)];
-    const float trace = a.mxx + a.myy;
-    if (a.rho > 0.0f && trace > 0.0f && std::isfinite(trace)) {
-      return trace;
+    const TileWarpGeometry & g = tile_warp_geom_[static_cast<size_t>(k)];
+    if (g.valid && g.confidence > 0.0f && std::isfinite(g.confidence)) {
+      return g.confidence;
     }
     return 0.0f;
   }
@@ -1440,15 +1266,8 @@ private:
       smooth_scratch_[i] = field[i];
     }
 
-    const Eigen::VectorXf * fallback = fallback_for_tiles(tiles);
     const float lambda_s = params_.flow_reg_lambda;
-    const bool use_warped_geometry =
-      tile_warp_geom_.size() >= static_cast<size_t>(n_tiles);
-    if (use_warped_geometry) {
-      profile_.reg_warped_geometry_tiles += n_tiles;
-    } else {
-      profile_.reg_legacy_geometry_tiles += n_tiles;
-    }
+    profile_.reg_warped_geometry_tiles += n_tiles;
 
     for (int sweep = 0; sweep < params_.flow_reg_sweeps; ++sweep) {
       for (int ty = 0; ty < tiles; ++ty) {
@@ -1460,52 +1279,24 @@ private:
           float data_myy = 0.0f;
           float data_bx = 0.0f;
           float data_by = 0.0f;
-          float ex = 1.0f;
-          float ey = 0.0f;
           float tgx = 0.0f;
           float tgy = 1.0f;
 
-          if (use_warped_geometry) {
-            const TileWarpGeometry & g = tile_warp_geom_[static_cast<size_t>(k)];
-            if (!g.valid || !(g.confidence > 0.0f)) {
-              continue;
-            }
-            const float data_scale = std::max(g.confidence, 1e-12f);
-            const float tile_eps = params_.tikhonov_eps * data_scale;
-            const float anchor_vx = -smooth_scratch_[2 * k];
-            const float anchor_vy = -smooth_scratch_[2 * k + 1];
-            data_mxx = g.data_mxx + tile_eps;
-            data_mxy = g.data_mxy;
-            data_myy = g.data_myy + tile_eps;
-            data_bx = g.data_bx + tile_eps * anchor_vx;
-            data_by = g.data_by + tile_eps * anchor_vy;
-            tgx = g.tangent_x;
-            tgy = g.tangent_y;
-          } else {
-            const TileAccum & a = tile_accum_[static_cast<size_t>(k)];
-            float lmin = 0.0f;
-            float lmax = 0.0f;
-            eig2(a.mxx, a.mxy, a.myy, lmin, lmax);
-            const float data_scale = std::max(lmax, 1e-12f);
-            const float tile_eps = params_.tikhonov_eps * data_scale;
-            const float prior = prior_scale_ * params_.prior_lambda * data_scale;
-            const float fb_px =
-              fallback ? -(*fallback)[2 * k] : -smooth_scratch_[2 * k];
-            const float fb_py =
-              fallback ? -(*fallback)[2 * k + 1] : -smooth_scratch_[2 * k + 1];
-
-            data_mxx = a.mxx + tile_eps + prior;
-            data_mxy = a.mxy;
-            data_myy = a.myy + tile_eps + prior;
-            data_bx = a.bx + prior * fb_px;
-            data_by = a.by + prior * fb_py;
-
-            // Legacy structure tensor: dominant eigenvector is the edge normal,
-            // so the weak/tangential direction is its perpendicular.
-            dominant_eigenvector(a.mxx, a.mxy, a.myy, lmax, ex, ey);
-            tgx = -ey;
-            tgy = ex;
+          const TileWarpGeometry & g = tile_warp_geom_[static_cast<size_t>(k)];
+          if (!g.valid || !(g.confidence > 0.0f)) {
+            continue;
           }
+          const float data_scale = std::max(g.confidence, 1e-12f);
+          const float tile_eps = params_.tikhonov_eps * data_scale;
+          const float anchor_vx = -smooth_scratch_[2 * k];
+          const float anchor_vy = -smooth_scratch_[2 * k + 1];
+          data_mxx = g.data_mxx + tile_eps;
+          data_mxy = g.data_mxy;
+          data_myy = g.data_myy + tile_eps;
+          data_bx = g.data_bx + tile_eps * anchor_vx;
+          data_by = g.data_by + tile_eps * anchor_vy;
+          tgx = g.tangent_x;
+          tgy = g.tangent_y;
 
           // Accumulo rank-1: penalita' sum_n w_n * (t . (v - v_n))^2.
           //   LHS += (sum_n w_n) * t t^T      (Cxx,Cxy,Cyy)
@@ -1521,7 +1312,7 @@ private:
               return;
             }
             const int nk = ny * tiles + nx;
-            const float conf = tile_data_confidence(nk, use_warped_geometry);
+            const float conf = tile_data_confidence(nk);
             if (!(conf > 0.0f)) {
               return;
             }
@@ -1659,5 +1450,48 @@ private:
     }
   }
 };
+
+MomentFlow::MomentFlow(int img_w, int img_h, MomentFlowParams params)
+: impl_(std::make_unique<Impl>(img_w, img_h, params))
+{}
+
+MomentFlow::~MomentFlow() = default;
+MomentFlow::MomentFlow(MomentFlow &&) noexcept = default;
+MomentFlow & MomentFlow::operator=(MomentFlow &&) noexcept = default;
+
+bool MomentFlow::compatible(
+  int img_w, int img_h, const MomentFlowParams & params) const
+{
+  return impl_->compatible(img_w, img_h, params);
+}
+
+int MomentFlow::num_vars() const { return impl_->num_vars(); }
+
+const MomentFlowProfile & MomentFlow::profile() const { return impl_->profile(); }
+
+void MomentFlow::set_prior_scale(float scale) { impl_->set_prior_scale(scale); }
+void MomentFlow::set_mass_scale(float scale) { impl_->set_mass_scale(scale); }
+void MomentFlow::set_max_threads(int threads) { impl_->set_max_threads(threads); }
+void MomentFlow::reset() { impl_->reset(); }
+void MomentFlow::ingest(const Events & events) { impl_->ingest(events); }
+
+void MomentFlow::solve(
+  const Eigen::VectorXf & warm_start, Eigen::VectorXf & output)
+{
+  impl_->solve(warm_start, output);
+}
+
+void MomentFlow::solve_coarse_to_fine(
+  const Events & events,
+  const Eigen::VectorXf & warm_start,
+  Eigen::VectorXf & output)
+{
+  impl_->solve_coarse_to_fine(events, warm_start, output);
+}
+
+void MomentFlow::final_tile_confidence(std::vector<float> & confidence) const
+{
+  impl_->final_tile_confidence(confidence);
+}
 
 }  // namespace moment_flow::flow

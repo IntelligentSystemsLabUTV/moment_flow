@@ -6,8 +6,6 @@
         transform_pose: false
         wait_servers: false
     autostart: true
-    ba_filter_enabled: true        # background-activity noise filter (drops isolated hot/shot-noise events)
-    ba_filter_dt_ms: 1.0           # BA correlation time: an event survives only if a neighbor fired within this dt
     iwe_enabled: false              # render the Image of Warped Events (alignment diagnostic / visualization)
     flow_enabled: true             # run the MomentFlow optical-flow estimator
     flow_events_enabled: true     # publish event-supported sparse flow via a warped-event support mask
@@ -28,6 +26,7 @@
     flow_tikhonov_eps: 0.0005      # Tikhonov regularization coefficient (scaled by the tile's dominant eigenvalue)
 
     flow_prior_lambda: 0.7      # pull toward the prior (coarser scale / warm-start); high = more stable but shrinks fast motion
+    flow_track_enabled: true      # warm-start each window's coarse-to-fine solve with the previous window's tracked field
     flow_reg_lambda: 0.0      # spatial coupling strength of the data-coupled regularizer (0 = exact no-op)
     flow_reg_sweeps: 0      # Gauss-Seidel sweeps for the coupled regularizer (0 = exact no-op)
     flow_reg_sigma: 60.0      # Charbonnier edge-preserving threshold [px/s]; large = nearly isotropic coupling
@@ -42,6 +41,7 @@
     flow_save_output_dir: /home/neo/workspace/logs/moment_flow/thun_00_a   # output directory for the exported flow PNGs
     flow_save_timestamp_file: /home/neo/workspace/logs/dsec/thun_00_a/optical_flow_forward/thun_00_a_optical_flow_forward_timestamps.txt   # DSEC (from_us, to_us, index) save schedule
     flow_save_clear_output: true   # delete stale PNGs in the output dir before saving
+    flow_save_gap_fill: true       # keep solving (and discarding) the windows skipped between non-adjacent scheduled exports, so the tracked field stays fresh
     flow_save_first_index: 2       # first DSEC GT file index to save
     flow_save_index_step: 2        # DSEC GT file index step (matches the 100 ms / 10 Hz GT cadence)
     timing_log_path: /home/neo/workspace/logs/moment_flow/thun_00_a.csv   # end-to-end MomentFlow solve time per window (from_us,to_us,num_events,total_ms)

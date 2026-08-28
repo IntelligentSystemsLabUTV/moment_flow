@@ -3,11 +3,6 @@ project(moment_flow)
 
 set(CMAKE_BUILD_TYPE "RelWithDebInfo")
 
-# Default to C99
-if(NOT CMAKE_C_STANDARD)
-  set(CMAKE_C_STANDARD 99)
-endif()
-
 # Default to C++17
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 17)
@@ -19,7 +14,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 cmake_policy(SET CMP0146 OLD)
-cmake_policy(SET CMP0074 OLD)
+cmake_policy(SET CMP0074 NEW)
 if(POLICY CMP0144)
   cmake_policy(SET CMP0144 NEW)
 endif()
@@ -29,10 +24,7 @@ set(THREADS_PREFER_PTHREAD_FLAG ON)
 # Find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(dua_app_management REQUIRED)
-find_package(dua_common_interfaces REQUIRED)
 find_package(dua_cv_bridge REQUIRED)
-find_package(dua_geometry_interfaces REQUIRED)
-find_package(dua_hardware_interfaces REQUIRED)
 find_package(dua_node_cpp REQUIRED)
 find_package(dua_qos_cpp REQUIRED)
 find_package(Eigen3 3.4 REQUIRED)
@@ -45,7 +37,6 @@ find_package(params_manager_cpp REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(simple_serviceclient_cpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(Threads REQUIRED)
@@ -60,10 +51,16 @@ generate_init_parameters(
   OUT_FILE "init_parameters.cpp")
 
 # Configure Moment Flow node source files
-file(GLOB MOMENT_FLOW_NODE_SRCS
-  RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
-  "src/moment_flow/*.cpp")
-list(APPEND MOMENT_FLOW_NODE_SRCS init_parameters.cpp)
+set(MOMENT_FLOW_NODE_SRCS
+  src/moment_flow/moment_flow.cpp
+  src/moment_flow/moment_flow_solver.cpp
+  src/moment_flow/optical_flow.cpp
+  src/moment_flow/service_servers.cpp
+  src/moment_flow/stream_discontinuity.cpp
+  src/moment_flow/subscriptions.cpp
+  src/moment_flow/utils.cpp
+  src/moment_flow/workers.cpp
+  init_parameters.cpp)
 
 # Moment Flow node
 add_library(moment_flow SHARED ${MOMENT_FLOW_NODE_SRCS})
@@ -74,7 +71,7 @@ target_include_directories(moment_flow PUBLIC
   ${EIGEN3_INCLUDE_DIR}
   ${OpenCV_INCLUDE_DIRS}
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/moment_flow>)
-target_compile_features(moment_flow PUBLIC c_std_99 cxx_std_17) # Require C99 and C++17
+target_compile_features(moment_flow PUBLIC cxx_std_17)
 target_link_libraries(moment_flow
   Eigen3::Eigen
   ${OpenCV_LIBS}
@@ -82,10 +79,7 @@ target_link_libraries(moment_flow
   Threads::Threads
 )
 ament_target_dependencies(moment_flow
-  dua_common_interfaces
   dua_cv_bridge
-  dua_geometry_interfaces
-  dua_hardware_interfaces
   dua_node_cpp
   dua_qos_cpp
   event_camera_codecs
@@ -94,7 +88,6 @@ ament_target_dependencies(moment_flow
   rclcpp
   rclcpp_components
   sensor_msgs
-  simple_serviceclient_cpp
   std_msgs
   std_srvs
 )
@@ -107,7 +100,7 @@ add_executable(moment_flow_app
 target_include_directories(moment_flow_app PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-target_compile_features(moment_flow_app PUBLIC c_std_99 cxx_std_17) # Require C99 and C++17
+target_compile_features(moment_flow_app PUBLIC cxx_std_17)
 target_link_libraries(moment_flow_app moment_flow)
 ament_target_dependencies(moment_flow_app
   dua_app_management
@@ -118,6 +111,11 @@ install(TARGETS moment_flow
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin)
+
+install(DIRECTORY include/
+  DESTINATION include)
+
+ament_export_include_directories(include)
 
 # Install Moment Flow app
 install(TARGETS moment_flow_app

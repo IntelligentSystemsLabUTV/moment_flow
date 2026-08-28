@@ -27,7 +27,7 @@
  * limitations under the License.
  */
 
-#include "moment_flow/moment_flow.hpp"
+#include "moment_flow/event_detector.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -35,6 +35,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <vector>
 
 #include <omp.h>
@@ -54,13 +55,6 @@ using moment_flow::flow::Events;
 using moment_flow::flow::MomentFlowParams;
 
 constexpr float kFocusSplatOffsetIwePx = 0.21f;
-
-struct IweRenderStats
-{
-  size_t input = 0;
-  size_t accepted = 0;
-  size_t dropped = 0;
-};
 
 using ProfileClock = std::chrono::steady_clock;
 
@@ -230,14 +224,13 @@ void smooth_field_confidence(
 }
 
 /**
- * Warp events to the reference time with the current tile field (and optional
- * acceleration field): x' = x + t*v(x) + 0.5*t^2*a(x), t relative to t_ref.
+ * Warp events to the reference time with the current tile field:
+ * x' = x + t*v(x), with t relative to t_ref.
  * Out-of-bounds warps are dropped, mirroring MomentFlow::ingest.
  */
 void warp_events_by_field(
   const Events & src,
   const Eigen::VectorXf & F,
-  const Eigen::VectorXf * A,
   int tiles,
   int img_w,
   int img_h,
@@ -270,12 +263,6 @@ void warp_events_by_field(
       sample_tile_velocity(F, tiles, tiles, img_w, img_h, x, y, vx, vy);
       float wx = x + t * vx;
       float wy = y + t * vy;
-      if (A != nullptr) {
-        float ax, ay;
-        sample_tile_velocity(*A, tiles, tiles, img_w, img_h, x, y, ax, ay);
-        wx += 0.5f * t * t * ax;
-        wy += 0.5f * t * t * ay;
-      }
       if (!(wx >= 0.0f && wy >= 0.0f && wx < img_w && wy < img_h)) {
         continue;
       }
@@ -321,10 +308,9 @@ double iwe_contrast(const cv::Mat & iwe)
   return acc / static_cast<double>((iwe.rows - 1) * (iwe.cols - 1));
 }
 
-IweRenderStats render_iwe_bilinear(
+void render_iwe_bilinear(
   const Events & events,
   const Eigen::VectorXf & F,
-  const Eigen::VectorXf * A,
   int tiles,
   int img_w,
   int img_h,
@@ -334,8 +320,6 @@ IweRenderStats render_iwe_bilinear(
   float splat_offset_iwe_px,
   cv::Mat & iwe)
 {
-  IweRenderStats stats;
-  stats.input = events.size();
   const int iw = (img_w + scale - 1) / scale;
   const int ih = (img_h + scale - 1) / scale;
   const float inv_scale = 1.0f / static_cast<float>(scale);
@@ -352,13 +336,6 @@ IweRenderStats render_iwe_bilinear(
       sample_tile_velocity(F, tiles, tiles, img_w, img_h, ox, oy, vx, vy);
       wx += (t - t_ref_target_s) * vx;
       wy += (t - t_ref_target_s) * vy;
-      if (A != nullptr) {
-        float ax, ay;
-        sample_tile_velocity(*A, tiles, tiles, img_w, img_h, ox, oy, ax, ay);
-        const float dq = t * t - t_ref_target_s * t_ref_target_s;
-        wx += 0.5f * dq * ax;
-        wy += 0.5f * dq * ay;
-      }
     }
     wx = wx * inv_scale + splat_offset_iwe_px;
     wy = wy * inv_scale + splat_offset_iwe_px;
@@ -366,7 +343,6 @@ IweRenderStats render_iwe_bilinear(
     const int x0 = static_cast<int>(std::floor(wx));
     const int y0 = static_cast<int>(std::floor(wy));
     if (x0 < 0 || y0 < 0 || x0 + 1 >= iw || y0 + 1 >= ih) {
-      stats.dropped += 1;
       continue;
     }
     const float fx = wx - x0;
@@ -377,9 +353,7 @@ IweRenderStats render_iwe_bilinear(
     r0[x0 + 1] += fx * (1.0f - fy);
     r1[x0]     += (1.0f - fx) * fy;
     r1[x0 + 1] += fx * fy;
-    stats.accepted += 1;
   }
-  return stats;
 }
 
 /**
@@ -390,7 +364,6 @@ IweRenderStats render_iwe_bilinear(
 cv::Mat render_support_mask(
   const Events & events,
   const Eigen::VectorXf & F,
-  const Eigen::VectorXf * A,
   int tiles,
   int img_w,
   int img_h,
@@ -419,12 +392,6 @@ cv::Mat render_support_mask(
         sample_tile_velocity(F, tiles, tiles, img_w, img_h, wx, wy, vx, vy);
         float px = events.x[k] + t * vx;
         float py = events.y[k] + t * vy;
-        if (A != nullptr) {
-          float ax, ay;
-          sample_tile_velocity(*A, tiles, tiles, img_w, img_h, wx, wy, ax, ay);
-          px += 0.5f * t * t * ax;
-          py += 0.5f * t * t * ay;
-        }
         wx = px;
         wy = py;
       }
@@ -741,7 +708,7 @@ EventDetector::FlowResult EventDetector::solve_flow_moment(
     moment_flow_->set_prior_scale(0.5f);
     for (int it = 0; it < static_cast<int>(flow_refine_iters_); ++it) {
       warp_events_by_field(
-        ev, F, nullptr,
+        ev, F,
         final_tiles, w, h, n_threads, wev);
       if (wev.size() < 2) {
         break;
@@ -808,7 +775,6 @@ EventDetector::FlowResult EventDetector::solve_flow_moment(
   // f <= 1 means the field did not improve this particular focus metric. Keep
   // the candidate visible anyway; otherwise a strict gate can black out the
   // first frame and keep every later warm start at zero.
-  const Eigen::VectorXf * accel_ptr = nullptr;
   const int iwe_scale = std::max<int>(1, static_cast<int>(flow_iwe_scale_));
   const float t_lo_ref_s = static_cast<float>(t_lo_us - t_ref_us) * 1e-6f;
   const float t_hi_ref_s = static_cast<float>(t_hi_us - t_ref_us) * 1e-6f;
@@ -843,16 +809,16 @@ EventDetector::FlowResult EventDetector::solve_flow_moment(
     }
 
     render_iwe_bilinear(
-      *focus_src, F, nullptr, final_tiles, w, h, iwe_scale, false, 0.0f,
+      *focus_src, F, final_tiles, w, h, iwe_scale, false, 0.0f,
       kFocusSplatOffsetIwePx, focus_id);
     render_iwe_bilinear(
-      *focus_src, F, accel_ptr, final_tiles, w, h, iwe_scale, true, 0.0f,
+      *focus_src, F, final_tiles, w, h, iwe_scale, true, 0.0f,
       kFocusSplatOffsetIwePx, focus_mid);
     render_iwe_bilinear(
-      *focus_src, F, accel_ptr, final_tiles, w, h, iwe_scale, true, t_lo_ref_s,
+      *focus_src, F, final_tiles, w, h, iwe_scale, true, t_lo_ref_s,
       kFocusSplatOffsetIwePx, focus_lo);
     render_iwe_bilinear(
-      *focus_src, F, accel_ptr, final_tiles, w, h, iwe_scale, true, t_hi_ref_s,
+      *focus_src, F, final_tiles, w, h, iwe_scale, true, t_hi_ref_s,
       kFocusSplatOffsetIwePx, focus_hi);
     // The common sub-pixel offset gives integer identity splats variance
     // eps*(1-eps) ~= 1/6, the average bilinear variance of fractional warps.
@@ -1005,7 +971,7 @@ EventDetector::FlowResult EventDetector::solve_flow_moment(
   if (need_event_mask) {
     const auto t_support_mask = ProfileClock::now();
     support_mask = render_support_mask(
-      render_ev, F, flow_rejected ? nullptr : accel_ptr,
+      render_ev, F,
       final_tiles, w, h, /*warp=*/!flow_rejected, n_threads);
     timing.support_mask_ms = elapsed_ms(t_support_mask);
 
@@ -1047,7 +1013,7 @@ EventDetector::FlowResult EventDetector::solve_flow_moment(
       "active_cells=%d valid_cells=%d reject(residual/speed)=%d/%d "
       "tiles_total(full/aperture/fallback/prior)=%d/%d/%d/%d "
       "tiles_final(full/aperture/fallback)=%d/%d/%d "
-      "reg(modified_frac/mean_delta legacy_geom/warped_geom) %.3f/%.3f %d/%d",
+      "reg(modified_frac/mean_delta warped_geom) %.3f/%.3f %d",
       profile.ingest_ms, profile.stage_a_ms,
       profile.stage_b_ms, profile.smooth_ms, profile.total_solve_ms, timing.solve_moments_ms,
       profile.events_ingested, profile.active_cells, profile.valid_cells,
@@ -1056,7 +1022,7 @@ EventDetector::FlowResult EventDetector::solve_flow_moment(
       profile.prior_tiles,
       profile.final_full_rank_tiles, profile.final_aperture_tiles, profile.final_fallback_tiles,
       reg_modified_fraction, profile.reg_mean_delta_speed,
-      profile.reg_legacy_geometry_tiles, profile.reg_warped_geometry_tiles);
+      profile.reg_warped_geometry_tiles);
 
     // FWL standard (single-reference, Stoffregen & Kleeman 2019): ratio between
     // the motion-compensated IWE variance and the identity-IWE variance. It is

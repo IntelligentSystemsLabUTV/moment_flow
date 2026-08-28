@@ -31,26 +31,18 @@
 #include <cstdint>
 #include <deque>
 #include <fstream>
-#include <iterator>
 #include <limits>
 #include <mutex>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
 
 #include <dua_node_cpp/dua_node.hpp>
-#include <dua_qos_cpp/dua_qos.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 #include <Eigen/Core>
-
-#include <dua_common_interfaces/msg/command_result_stamped.hpp>
-
-#include <dua_cv_bridge/dua_cv_bridge.hpp>
-#include <sensor_msgs/image_encodings.hpp>
 
 #include <opencv2/core/mat.hpp>
 #include <opencv2/core/types.hpp>
@@ -59,121 +51,16 @@
 #include <event_camera_msgs/msg/event_packet.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <std_msgs/msg/header.hpp>
+#include <std_srvs/srv/set_bool.hpp>
 
-#include <moment_flow/flow/moment_flow.hpp>
-
-using namespace event_camera_msgs::msg;
+#include <moment_flow/event_store.hpp>
+#include <moment_flow/moment_flow_solver.hpp>
 
 namespace moment_flow
 {
 
-struct Event
-{
-  int64_t t_us;
-  int16_t x_px;
-  int16_t y_px;
-  bool polarity;
-
-  Event() = default;
-
-  Event(int64_t timestamp_us, int16_t x, int16_t y, bool p)
-  : t_us(timestamp_us),
-    x_px(x),
-    y_px(y),
-    polarity(p)
-  {}
-
-  int64_t timestamp() const { return t_us; }
-  int16_t x() const { return x_px; }
-  int16_t y() const { return y_px; }
-};
-
-class EventStore
-{
-public:
-  using container_type = std::vector<Event>;
-  using iterator = container_type::iterator;
-  using const_iterator = container_type::const_iterator;
-
-  EventStore() = default;
-
-  explicit EventStore(container_type events)
-  : events_(std::move(events))
-  {}
-
-  bool isEmpty() const { return events_.empty(); }
-  std::size_t size() const { return events_.size(); }
-  void clear() { events_.clear(); }
-  void reserve(std::size_t n) { events_.reserve(n); }
-
-  iterator begin() { return events_.begin(); }
-  iterator end() { return events_.end(); }
-  const_iterator begin() const { return events_.begin(); }
-  const_iterator end() const { return events_.end(); }
-
-  const Event & front() const { return events_.front(); }
-  const Event & back() const { return events_.back(); }
-
-  void push_back(const Event & event) { events_.push_back(event); }
-  void push_back(Event && event) { events_.push_back(std::move(event)); }
-  void push_back(int64_t timestamp_us, int16_t x, int16_t y, bool polarity)
-  {
-    events_.emplace_back(timestamp_us, x, y, polarity);
-  }
-
-  int64_t getLowestTime() const
-  {
-    return events_.empty() ? std::numeric_limits<int64_t>::max() : events_.front().timestamp();
-  }
-
-  int64_t getHighestTime() const
-  {
-    return events_.empty() ? std::numeric_limits<int64_t>::lowest() : events_.back().timestamp();
-  }
-
-  EventStore sliceTime(int64_t from_us) const
-  {
-    const auto first = std::lower_bound(
-      events_.begin(), events_.end(), from_us,
-      [](const Event & event, int64_t t_us) {
-        return event.timestamp() < t_us;
-      });
-    return EventStore(container_type(first, events_.end()));
-  }
-
-  void add(const EventStore & other)
-  {
-    if (other.isEmpty()) {
-      return;
-    }
-    if (!events_.empty() && other.getLowestTime() < getHighestTime()) {
-      throw std::out_of_range("EventStore::add received out-of-order events");
-    }
-    events_.insert(events_.end(), other.begin(), other.end());
-  }
-
-  void add(EventStore && other)
-  {
-    if (other.isEmpty()) {
-      return;
-    }
-    if (!events_.empty() && other.getLowestTime() < getHighestTime()) {
-      throw std::out_of_range("EventStore::add received out-of-order events");
-    }
-    if (events_.empty()) {
-      events_ = std::move(other.events_);
-      return;
-    }
-    events_.insert(
-      events_.end(),
-      std::make_move_iterator(other.events_.begin()),
-      std::make_move_iterator(other.events_.end()));
-    other.events_.clear();
-  }
-
-private:
-  container_type events_;
-};
+using EventPacket = event_camera_msgs::msg::EventPacket;
+using SetBool = std_srvs::srv::SetBool;
 
 class EventDetector : public dua_node::NodeBase
 {
@@ -181,7 +68,8 @@ public:
   /**
    * @brief Constructor.
    */
-  EventDetector(const rclcpp::NodeOptions & node_options = rclcpp::NodeOptions());
+  explicit EventDetector(
+    const rclcpp::NodeOptions & node_options = rclcpp::NodeOptions());
 
   /**
    * @brief Destructor.
@@ -194,6 +82,7 @@ private:
   void init_cgroups() override;
   void init_publishers() override;
   void init_subscribers() override;
+  void init_service_servers() override;
 
   /**
    * @brief Activates the node.
@@ -204,6 +93,20 @@ private:
    * @brief Deactivates the node.
    */
   void deactivate();
+
+  /**
+   * @brief Enable service callback: activates or deactivates the node.
+   *
+   * Idempotent: a request matching the current state succeeds without touching
+   * the worker thread. Runs on its own mutually exclusive callback group, so
+   * two requests can never interleave.
+   *
+   * @param req Request, true to activate.
+   * @param res Response.
+   */
+  void callback_enable(
+    SetBool::Request::SharedPtr req,
+    SetBool::Response::SharedPtr res);
 
   /**
    * @brief Event-packet subscription callback (executor thread).
@@ -218,7 +121,7 @@ private:
   /**
    * @brief Worker thread main loop.
    *
-   * Drains the event queue and runs the enabled features (BA, IWE, optical
+   * Drains the event queue and runs the enabled features (IWE and optical
    * flow) on each chunk, publishing their results. Owns all stateful processors,
    * so they need no locking. Exits when the node is deactivated and the queue
    * has been drained.
@@ -226,15 +129,11 @@ private:
   void worker_thread_routine();
 
   /**
-   * @brief Applies the background-activity noise filter to a chunk of events.
+   * @brief Resets stateful processors after a large backward timestamp jump.
    *
-   * Enforces the monotonic ordering dv's filter requires and resets all
-   * stateful processors on a stream discontinuity. Runs on the worker thread.
-   *
-   * @param raw Decoded events for one packet.
-   * @return The filtered events (possibly empty).
+   * @param events Decoded events for one packet.
    */
-  EventStore compute_ba(const EventStore & raw);
+  void handle_stream_discontinuity(const EventStore & events);
 
   /* Outputs of one dense optical-flow solve over a window. */
   struct FlowResult
@@ -400,13 +299,12 @@ private:
   public:
     EventStoreBuilder() = default;
 
-    void eventCD(uint64_t sensor_time, uint16_t ex, uint16_t ey, uint8_t polarity) override
+    void eventCD(uint64_t sensor_time, uint16_t ex, uint16_t ey, uint8_t) override
     {
       events_.emplace_back(
         static_cast<int64_t>(sensor_time / 1000),
         static_cast<int16_t>(ex),
-        static_cast<int16_t>(ey),
-        polarity != 0);
+        static_cast<int16_t>(ey));
     }
 
     void eventExtTrigger(uint64_t, uint8_t, uint8_t) override {}
@@ -439,6 +337,7 @@ private:
   };
 
   /* Callback Groups. */
+  rclcpp::CallbackGroup::SharedPtr cgroup_enable_;
   rclcpp::CallbackGroup::SharedPtr cgroup_event_packet_;
 
   /* Publishers. */
@@ -453,15 +352,15 @@ private:
   /* Subscribers. */
   rclcpp::Subscription<EventPacket>::SharedPtr sub_event_packet_;
 
+  /* Service servers. */
+  rclcpp::Service<SetBool>::SharedPtr server_enable_;
+
   /* Decoder. */
   event_camera_codecs::DecoderFactory<EventPacket, EventStoreBuilder> decoder_factory_;
 
-  /* Filter / resolution state. */
+  /* Resolution and stream state. */
   cv::Size res_;
-  std::vector<int64_t> ba_last_us_;
-  /* Highest BA-filter input time, used to keep packet overlaps monotonic and
-   * detect stream discontinuities. */
-  int64_t filter_high_us_{std::numeric_limits<int64_t>::lowest()};
+  int64_t stream_high_us_{std::numeric_limits<int64_t>::lowest()};
 
   /* Optical-flow state. Events accumulate here until the time span reaches
    * flow_max_window_ms_, at which point the moment-flow estimator solves the
@@ -489,8 +388,6 @@ private:
 
   /* Node parameters. */
   bool    autostart_;
-  bool    ba_filter_enabled_;
-  double  ba_filter_dt_ms_;
   bool    iwe_enabled_;
   bool    flow_enabled_;
   bool    flow_events_enabled_;

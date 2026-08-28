@@ -22,7 +22,7 @@
  * limitations under the License.
  */
 
-#include "moment_flow/moment_flow.hpp"
+#include "moment_flow/event_detector.hpp"
 
 #include <cstddef>
 #include <mutex>
@@ -71,7 +71,8 @@ void EventDetector::callback_event_packet(EventPacket::ConstSharedPtr msg)
     } else if (flow_save_enabled_ && queue_.size() >= kMaxQueueChunks) {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 2000,
-        "Worker behind while raw-flow saving is enabled; preserving queued chunks for benchmark precision");
+        "Worker behind while raw-flow saving is enabled; "
+        "preserving queued chunks for benchmark precision");
     }
     queue_.push_back(std::move(chunk));
   }

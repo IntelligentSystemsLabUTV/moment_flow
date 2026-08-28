@@ -22,19 +22,25 @@
  * limitations under the License.
  */
 
-#include "moment_flow/moment_flow.hpp"
+#include "moment_flow/event_detector.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <cinttypes>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <limits>
+#include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
+#include <dua_cv_bridge/dua_cv_bridge.hpp>
 #include <opencv2/imgcodecs.hpp>
 
 namespace moment_flow
@@ -76,6 +82,10 @@ std::vector<int64_t> parse_int64_fields(std::string line)
 
 void EventDetector::activate()
 {
+  // The enable service makes re-activation reachable, so start from scratch
+  // instead of inheriting the previous activation's tracked field and schedule.
+  reset_state();
+
   prepare_flow_saving();
   prepare_timing_log();
 
@@ -95,6 +105,13 @@ void EventDetector::deactivate()
   queue_cv_.notify_all();
   if (thread_worker_.joinable()) {
     thread_worker_.join();
+  }
+
+  // Drop whatever the worker did not get to: on the next activation those
+  // chunks would arrive as a backward timestamp jump.
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    queue_.clear();
   }
 
   if (timing_log_stream_.is_open()) {
@@ -175,18 +192,11 @@ void EventDetector::log_timing(
 void EventDetector::lazy_init(int width, int height)
 {
   res_ = cv::Size(width, height);
-  ba_last_us_.assign(
-    static_cast<std::size_t>(std::max(0, width) * std::max(0, height)),
-    std::numeric_limits<int64_t>::lowest());
 }
 
 void EventDetector::reset_state()
 {
-  std::fill(
-    ba_last_us_.begin(),
-    ba_last_us_.end(),
-    std::numeric_limits<int64_t>::lowest());
-  filter_high_us_ = std::numeric_limits<int64_t>::lowest();
+  stream_high_us_ = std::numeric_limits<int64_t>::lowest();
   flow_accum_ = EventStore();
   flow_accum_first_us_ = std::numeric_limits<int64_t>::max();
   flow_accum_last_us_ = std::numeric_limits<int64_t>::lowest();
@@ -195,6 +205,7 @@ void EventDetector::reset_state()
   moment_flow_.reset();
   flow_save_next_window_ = 0;
   flow_save_sequence_index_ = 0;
+  flow_save_prev_estimate_end_us_ = -1;
 }
 
 void EventDetector::prepare_flow_saving()

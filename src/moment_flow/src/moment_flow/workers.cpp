@@ -22,14 +22,18 @@
  * limitations under the License.
  */
 
-#include "moment_flow/moment_flow.hpp"
+#include "moment_flow/event_detector.hpp"
 
 #include <algorithm>
 #include <cinttypes>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <mutex>
 #include <utility>
+
+#include <sensor_msgs/image_encodings.hpp>
 
 namespace moment_flow
 {
@@ -62,20 +66,9 @@ void EventDetector::worker_thread_routine()
       lazy_init(chunk.width, chunk.height);
     }
 
-    // Background-activity filtering (per packet).
-    const auto t_ba = std::chrono::high_resolution_clock::now();
-    bool filtered_empty = chunk.events.isEmpty();
-    if (ba_filter_enabled_) {
-      EventStore filtered = compute_ba(chunk.events);
-      filtered_empty = filtered.isEmpty();
-    }
-    if (filtered_empty && !(iwe_enabled_ || flow_enabled_ || flow_save_enabled_)) {
+    handle_stream_discontinuity(chunk.events);
+    if (chunk.events.isEmpty() && !(iwe_enabled_ || flow_enabled_ || flow_save_enabled_)) {
       continue;
-    }
-    if (debug_) {
-      const auto dt1 = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::high_resolution_clock::now() - t_ba).count();
-      RCLCPP_INFO_THROTTLE(this->get_logger(), *get_clock(), 1000, "BA filter: %ld ms", dt1);
     }
 
     // IWE and optical flow run once per fixed-duration flow window. When a
