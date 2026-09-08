@@ -6,13 +6,13 @@
  * minimizing warped event-cloud dispersion. The dense flow and the Image of
  * Warped Events at the window midpoint are rendered for publishing.
  *
- * dotX Automation s.r.l. <info@dotxautomation.com>
+ * Alexandru Cretu <alexandru.cretu@uniroma2.it>
  *
  * May 28, 2026
  */
 
 /**
- * Copyright 2024 dotX Automation s.r.l.
+ * Copyright 2026 Alexandru Cretu
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -90,16 +90,16 @@ inline void sample_tile_velocity(
   int j0 = static_cast<int>(std::floor(gy));
   const float fx = gx - i0;
   const float fy = gy - j0;
-  auto cl = [](int v, int n) { return std::clamp(v, 0, n - 1); };
+  auto cl = [](int v, int n) {return std::clamp(v, 0, n - 1);};
   const int i0c = cl(i0, tx), i1c = cl(i0 + 1, tx);
   const int j0c = cl(j0, ty), j1c = cl(j0 + 1, ty);
   const int k00 = j0c * tx + i0c, k10 = j0c * tx + i1c;
   const int k01 = j1c * tx + i0c, k11 = j1c * tx + i1c;
   const float w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy);
-  const float w01 = (1 - fx) * fy,       w11 = fx * fy;
+  const float w01 = (1 - fx) * fy, w11 = fx * fy;
   vx = w00 * F[2 * k00] + w10 * F[2 * k10] + w01 * F[2 * k01] + w11 * F[2 * k11];
   vy = w00 * F[2 * k00 + 1] + w10 * F[2 * k10 + 1] +
-       w01 * F[2 * k01 + 1] + w11 * F[2 * k11 + 1];
+    w01 * F[2 * k01 + 1] + w11 * F[2 * k11 + 1];
 }
 
 Eigen::VectorXf upsample_field(
@@ -182,8 +182,8 @@ void smooth_field_confidence(
 
   std::vector<float> c(static_cast<size_t>(n_tiles));
   for (int k = 0; k < n_tiles; ++k) {
-    const float ck = (std::isfinite(conf[k]) && conf[k] > 0.0f)
-      ? conf[k] * conf_scale : 0.0f;
+    const float ck = (std::isfinite(conf[k]) && conf[k] > 0.0f) ?
+      conf[k] * conf_scale : 0.0f;
     // sqrt compresses the confidence dynamic range: slow scene regions emit
     // fewer events (low mass -> low confidence) but their estimate is valid;
     // without compression fast neighbors diffuse over them.
@@ -349,9 +349,9 @@ void render_iwe_bilinear(
     const float fy = wy - y0;
     float * r0 = iwe.ptr<float>(y0);
     float * r1 = iwe.ptr<float>(y0 + 1);
-    r0[x0]     += (1.0f - fx) * (1.0f - fy);
+    r0[x0] += (1.0f - fx) * (1.0f - fy);
     r0[x0 + 1] += fx * (1.0f - fy);
-    r1[x0]     += (1.0f - fx) * fy;
+    r1[x0] += (1.0f - fx) * fy;
     r1[x0 + 1] += fx * fy;
   }
 }
@@ -540,11 +540,11 @@ EventDetector::FlowResult EventDetector::solve_flow_moment(
 
   const int w = res_.width;
   const int h = res_.height;
-  const int n_scales = std::max<int>(1, static_cast<int>(flow_num_scales_));
+  const int n_scales = std::max<int>(1, static_cast<int>(num_scales_));
   const int final_tiles = 1 << (n_scales - 1);
-  const float vis_speed_cap = static_cast<float>(flow_max_speed_px_s_);
+  const float vis_speed_cap = static_cast<float>(max_speed_px_s_);
 
-  const int n_threads = resolve_threads(flow_num_threads_);
+  const int n_threads = resolve_threads(num_threads_);
 
   const auto t_select = ProfileClock::now();
   const std::size_t total = static_cast<std::size_t>(window.size());
@@ -554,11 +554,11 @@ EventDetector::FlowResult EventDetector::solve_flow_moment(
   // embedded targets. The mass gates are rescaled by 1/stride below, hence the
   // decimation is unbiased in expectation.
   const std::size_t max_solve_events = static_cast<std::size_t>(
-    std::max<int64_t>(0, flow_max_solve_events_));
+    std::max<int64_t>(0, max_solve_events_));
   const bool capped = max_solve_events > 0 && total > max_solve_events;
-  const std::size_t stride = capped
-    ? (total + max_solve_events - 1) / max_solve_events
-    : 1;
+  const std::size_t stride = capped ?
+    (total + max_solve_events - 1) / max_solve_events :
+    1;
   // Selection is positional (every stride-th event of the store), so the store
   // is split into chunks whose kept counts become write offsets: each kept
   // event lands at the index the serial loop would have given it. The window
@@ -633,38 +633,38 @@ EventDetector::FlowResult EventDetector::solve_flow_moment(
 
   MomentFlowParams params;
   params.num_scales = n_scales;
-  params.cell_size_px = static_cast<int>(flow_cell_size_px_);
-  params.cell_min_mass = static_cast<float>(flow_cell_min_mass_);
-  params.cell_min_lambda = static_cast<float>(flow_cell_min_lambda_);
-  params.cell_max_residual_ratio = static_cast<float>(flow_cell_max_residual_ratio_);
-  params.tile_min_mass = static_cast<float>(flow_tile_min_mass_);
-  params.tile_min_cells = static_cast<int>(flow_tile_min_cells_);
-  params.tile_min_lambda = static_cast<float>(flow_tile_min_lambda_);
-  params.aperture_ratio = static_cast<float>(flow_aperture_ratio_);
-  params.tikhonov_eps = static_cast<float>(flow_tikhonov_eps_);
-  params.prior_lambda = static_cast<float>(flow_prior_lambda_);
-  params.flow_reg_lambda = static_cast<float>(flow_reg_lambda_);
-  params.flow_reg_sweeps = static_cast<int>(flow_reg_sweeps_);
-  params.flow_reg_sigma = static_cast<float>(flow_reg_sigma_);
-  params.max_speed_px_s = static_cast<float>(flow_max_speed_px_s_);
+  params.cell_size_px = static_cast<int>(cell_size_px_);
+  params.cell_min_mass = static_cast<float>(cell_min_mass_);
+  params.cell_min_lambda = static_cast<float>(cell_min_lambda_);
+  params.cell_max_residual_ratio = static_cast<float>(cell_max_residual_ratio_);
+  params.tile_min_mass = static_cast<float>(tile_min_mass_);
+  params.tile_min_cells = static_cast<int>(tile_min_cells_);
+  params.tile_min_lambda = static_cast<float>(tile_min_lambda_);
+  params.aperture_ratio = static_cast<float>(aperture_ratio_);
+  params.tikhonov_eps = static_cast<float>(tikhonov_eps_);
+  params.prior_lambda = static_cast<float>(prior_lambda_);
+  params.reg_lambda = static_cast<float>(reg_lambda_);
+  params.reg_sweeps = static_cast<int>(reg_sweeps_);
+  params.reg_sigma = static_cast<float>(reg_sigma_);
+  params.max_speed_px_s = static_cast<float>(max_speed_px_s_);
 
   if (!moment_flow_.has_value() || !moment_flow_->compatible(w, h, params)) {
     moment_flow_.emplace(w, h, params);
   }
   moment_flow_->set_mass_scale(1.0f / static_cast<float>(stride));
-  moment_flow_->set_max_threads(static_cast<int>(flow_num_threads_));
+  moment_flow_->set_max_threads(static_cast<int>(num_threads_));
 
   Eigen::VectorXf warm_start;
   // Without the tracked field the window is solved independently, which is what
   // separates the temporal prior from the multiscale one: the coarser-level
   // prior still applies, only the carry-over from the previous window is gone.
-  const bool have_prev = (flow_track_enabled_ &&
+  const bool have_prev = (track_enabled_ &&
     prev_flow_tiles_ > 0 &&
     prev_flow_field_.size() == 2 * prev_flow_tiles_ * prev_flow_tiles_);
   if (have_prev) {
-    warm_start = (prev_flow_tiles_ == final_tiles)
-      ? prev_flow_field_
-      : upsample_field(
+    warm_start = (prev_flow_tiles_ == final_tiles) ?
+      prev_flow_field_ :
+      upsample_field(
           prev_flow_field_, prev_flow_tiles_, prev_flow_tiles_,
           final_tiles, final_tiles, w, h);
   }
@@ -692,7 +692,7 @@ EventDetector::FlowResult EventDetector::solve_flow_moment(
   // field shrinks, and the composition F <- F + dF converges to the dispersion
   // optimum without the truncation bias.
   int refine_done = 0;
-  if (flow_refine_enabled_ && flow_refine_iters_ > 0) {
+  if (refine_enabled_ && refine_iters_ > 0) {
     const auto t_refine = ProfileClock::now();
     // Residual speeds below this leave sub-pixel displacement over the window:
     // further iterations cannot sharpen the IWE, so stop early.
@@ -706,7 +706,7 @@ EventDetector::FlowResult EventDetector::solve_flow_moment(
     // degenerate tiles stable while letting corrections through; the full
     // prior would damp every step by ~1/(1+prior_lambda).
     moment_flow_->set_prior_scale(0.5f);
-    for (int it = 0; it < static_cast<int>(flow_refine_iters_); ++it) {
+    for (int it = 0; it < static_cast<int>(refine_iters_); ++it) {
       warp_events_by_field(
         ev, F,
         final_tiles, w, h, n_threads, wev);
@@ -728,7 +728,7 @@ EventDetector::FlowResult EventDetector::solve_flow_moment(
       }
     }
     moment_flow_->set_prior_scale(1.0f);
-    clamp_field_speed(F, static_cast<float>(flow_max_speed_px_s_));
+    clamp_field_speed(F, static_cast<float>(max_speed_px_s_));
     timing.refine_ms = elapsed_ms(t_refine);
   }
   {
@@ -738,13 +738,13 @@ EventDetector::FlowResult EventDetector::solve_flow_moment(
     moment_flow_->final_tile_confidence(smooth_conf);
     smooth_field_confidence(
       F, smooth_conf, final_tiles,
-      static_cast<int>(flow_smooth_sweeps_), static_cast<float>(flow_smooth_beta_));
+      static_cast<int>(smooth_sweeps_), static_cast<float>(smooth_beta_));
   }
   timing.solve_moments_ms = elapsed_ms(t_moment);
   const auto profile = moment_flow_->profile();
 
   const bool need_iwe = iwe_enabled_ || debug_;
-  const bool need_event_mask = flow_events_enabled_;
+  const bool need_event_mask = events_enabled_;
   const bool need_render_events = need_iwe || need_event_mask;
 
   // Without striding, the packed solver input already is every in-frame event
@@ -775,7 +775,7 @@ EventDetector::FlowResult EventDetector::solve_flow_moment(
   // f <= 1 means the field did not improve this particular focus metric. Keep
   // the candidate visible anyway; otherwise a strict gate can black out the
   // first frame and keep every later warm start at zero.
-  const int iwe_scale = std::max<int>(1, static_cast<int>(flow_iwe_scale_));
+  const int iwe_scale = std::max<int>(1, static_cast<int>(iwe_scale_));
   const float t_lo_ref_s = static_cast<float>(t_lo_us - t_ref_us) * 1e-6f;
   const float t_hi_ref_s = static_cast<float>(t_hi_us - t_ref_us) * 1e-6f;
   double g_id = 0.0;
@@ -824,14 +824,14 @@ EventDetector::FlowResult EventDetector::solve_flow_moment(
     // eps*(1-eps) ~= 1/6, the average bilinear variance of fractional warps.
     // Applying it to every focus render keeps zero-motion focus_f exactly neutral.
     auto focus_contrast = [](const cv::Mat & iwe) {
-      cv::Mat b;
-      cv::GaussianBlur(iwe, b, cv::Size(0, 0), 1.0);
-      return iwe_contrast(b);
-    };
-    g_id  = std::max(focus_contrast(focus_id), 1e-12);
+        cv::Mat b;
+        cv::GaussianBlur(iwe, b, cv::Size(0, 0), 1.0);
+        return iwe_contrast(b);
+      };
+    g_id = std::max(focus_contrast(focus_id), 1e-12);
     g_mid = focus_contrast(focus_mid);
-    g_lo  = focus_contrast(focus_lo);
-    g_hi  = focus_contrast(focus_hi);
+    g_lo = focus_contrast(focus_lo);
+    g_hi = focus_contrast(focus_hi);
     focus_f = (g_lo + 2.0 * g_mid + g_hi) / (4.0 * g_id);
     flow_rejected = !(focus_f > 1.0);
     timing.iwe_focus_ms = elapsed_ms(t_focus);
@@ -937,14 +937,14 @@ EventDetector::FlowResult EventDetector::solve_flow_moment(
       robust_max_speed = std::max<double>(support_speeds[nth], 0.05 * support_max_speed);
     }
     const double display_floor_speed = std::max(25.0, 0.10 * static_cast<double>(vis_speed_cap));
-    const double raw_display_max = (robust_max_speed > 1e-6)
-      ? robust_max_speed
-      : ((observed_max_speed > 1e-6) ? observed_max_speed : static_cast<double>(vis_speed_cap));
+    const double raw_display_max = (robust_max_speed > 1e-6) ?
+      robust_max_speed :
+      ((observed_max_speed > 1e-6) ? observed_max_speed : static_cast<double>(vis_speed_cap));
     const double display_max_speed = std::clamp(
       raw_display_max, display_floor_speed, static_cast<double>(vis_speed_cap));
-    const double support_mean_speed = support_speeds.empty()
-      ? 0.0
-      : support_speed_sum / static_cast<double>(support_speeds.size());
+    const double support_mean_speed = support_speeds.empty() ?
+      0.0 :
+      support_speed_sum / static_cast<double>(support_speeds.size());
     const double n_pix = static_cast<double>(std::max(1, w * h));
     const double vx_mean = vx_sum / n_pix;
     const double vy_mean = vy_sum / n_pix;
@@ -1001,10 +1001,10 @@ EventDetector::FlowResult EventDetector::solve_flow_moment(
 
   if (debug_) {
     const double reg_modified_fraction =
-      (profile.reg_total_tiles > 0)
-        ? static_cast<double>(profile.reg_modified_tiles) /
-          static_cast<double>(profile.reg_total_tiles)
-        : 0.0;
+      (profile.reg_total_tiles > 0) ?
+      static_cast<double>(profile.reg_modified_tiles) /
+      static_cast<double>(profile.reg_total_tiles) :
+      0.0;
 
     RCLCPP_DEBUG(
       get_logger(),
@@ -1031,11 +1031,11 @@ EventDetector::FlowResult EventDetector::solve_flow_moment(
     // raw float IWE before any normalization. Diagnostic only: never affects
     // flow_rejected or any published output.
     auto iwe_variance = [](const cv::Mat & iwe) {
-      cv::Scalar mean, stddev;
-      cv::meanStdDev(iwe, mean, stddev);
-      return stddev[0] * stddev[0];
-    };
-    const double var_id  = std::max(iwe_variance(focus_id), 1e-12);
+        cv::Scalar mean, stddev;
+        cv::meanStdDev(iwe, mean, stddev);
+        return stddev[0] * stddev[0];
+      };
+    const double var_id = std::max(iwe_variance(focus_id), 1e-12);
     const double var_mid = iwe_variance(focus_mid);
     const double fwl = var_mid / var_id;
 

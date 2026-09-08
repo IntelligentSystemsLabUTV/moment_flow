@@ -1,13 +1,13 @@
 /**
  * Moment Flow node implementation.
  *
- * dotX Automation s.r.l. <info@dotxautomation.com>
+ * Alexandru Cretu <alexandru.cretu@uniroma2.it>
  *
  * May 25, 2026
  */
 
 /**
- * Copyright 2024 dotX Automation s.r.l.
+ * Copyright 2026 Alexandru Cretu
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,15 +24,48 @@
 
 #include "moment_flow/event_detector.hpp"
 
-#include <dua_qos_cpp/dua_qos.hpp>
+#include <functional>
+#include <memory>
 
 namespace moment_flow
 {
 
-EventDetector::EventDetector(const rclcpp::NodeOptions & node_options)
-: NodeBase("moment_flow", node_options, true)
+namespace
 {
-  dua_init_node();
+
+/* Inputs are reliable: dropping an event packet loses events for good, and the
+ * decoder needs the full sequence. Depth 10 absorbs a late worker without
+ * pushing the loss into the middleware. */
+rclcpp::QoS input_qos()
+{
+  rclcpp::QoS qos(rclcpp::KeepLast(10));
+  qos.reliable();
+  qos.durability_volatile();
+  return qos;
+}
+
+/* Outputs are best effort with depth 1: a visualization consumer wants the
+ * latest field, never a backlog. */
+rclcpp::QoS image_qos()
+{
+  rclcpp::QoS qos(rclcpp::KeepLast(1));
+  qos.best_effort();
+  qos.durability_volatile();
+  return qos;
+}
+
+}  // namespace
+
+EventDetector::EventDetector(const rclcpp::NodeOptions & node_options)
+: Node("moment_flow", node_options)
+{
+  pmanager_ = std::make_unique<ParameterManager>(this);
+
+  init_parameters();
+  init_cgroups();
+  init_publishers();
+  init_subscribers();
+  init_service_servers();
 
   RCLCPP_INFO(this->get_logger(), "Node initialized");
 
@@ -48,62 +81,66 @@ EventDetector::~EventDetector()
 
 void EventDetector::init_cgroups()
 {
-  cgroup_enable_ = dua_create_exclusive_cgroup();
-  cgroup_event_packet_ = dua_create_exclusive_cgroup();
+  cgroup_enable_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  cgroup_event_packet_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 }
 
 void EventDetector::init_subscribers()
 {
-  sub_event_packet_ = dua_create_subscription<EventPacket>(
+  rclcpp::SubscriptionOptions options;
+  options.callback_group = cgroup_event_packet_;
+
+  sub_event_packet_ = create_subscription<EventPacket>(
     "/event_packet",
+    input_qos(),
     std::bind(
       &EventDetector::callback_event_packet,
       this,
       std::placeholders::_1),
-    dua_qos::Reliable::get_datum_qos(),
-    cgroup_event_packet_);
+    options);
 }
 
 void EventDetector::init_publishers()
 {
-  pub_flow_dense_debug_ = dua_create_publisher<sensor_msgs::msg::Image>(
+  pub_flow_dense_debug_ = create_publisher<sensor_msgs::msg::Image>(
     "~/flow_dense_debug",
-    dua_qos::BestEffort::get_image_qos(1));
+    image_qos());
 
-  pub_flow_dense_ = dua_create_publisher<sensor_msgs::msg::Image>(
+  pub_flow_dense_ = create_publisher<sensor_msgs::msg::Image>(
     "~/flow_dense",
-    dua_qos::BestEffort::get_image_qos(1));
+    image_qos());
 
-  pub_flow_tiles_ = dua_create_publisher<sensor_msgs::msg::Image>(
+  pub_flow_tiles_ = create_publisher<sensor_msgs::msg::Image>(
     "~/flow_tiles",
-    dua_qos::BestEffort::get_image_qos(1));
+    image_qos());
 
-  pub_flow_tile_debug_ = dua_create_publisher<sensor_msgs::msg::Image>(
+  pub_flow_tile_debug_ = create_publisher<sensor_msgs::msg::Image>(
     "~/flow_tile_debug",
-    dua_qos::BestEffort::get_image_qos(1));
+    image_qos());
 
-  pub_flow_events_debug_ = dua_create_publisher<sensor_msgs::msg::Image>(
+  pub_flow_events_debug_ = create_publisher<sensor_msgs::msg::Image>(
     "~/flow_events_debug",
-    dua_qos::BestEffort::get_image_qos(1));
+    image_qos());
 
-  pub_flow_events_ = dua_create_publisher<sensor_msgs::msg::Image>(
+  pub_flow_events_ = create_publisher<sensor_msgs::msg::Image>(
     "~/flow_events",
-    dua_qos::BestEffort::get_image_qos(1));
+    image_qos());
 
-  pub_iwe_ = dua_create_publisher<sensor_msgs::msg::Image>(
+  pub_iwe_ = create_publisher<sensor_msgs::msg::Image>(
     "~/iwe_image",
-    dua_qos::BestEffort::get_image_qos(1));
+    image_qos());
 }
 
 void EventDetector::init_service_servers()
 {
-  server_enable_ = dua_create_service_server<SetBool>(
+  server_enable_ = create_service<SetBool>(
     "~/enable",
     std::bind(
       &EventDetector::callback_enable,
       this,
       std::placeholders::_1,
       std::placeholders::_2),
+    rclcpp::ServicesQoS(),
     cgroup_enable_);
 }
 

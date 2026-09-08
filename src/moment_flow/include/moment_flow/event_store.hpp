@@ -1,13 +1,13 @@
 /**
  * Internal event representation and temporally ordered storage.
  *
- * dotX Automation s.r.l. <info@dotxautomation.com>
+ * Alexandru Cretu <alexandru.cretu@uniroma2.it>
  *
  * May 25, 2026
  */
 
 /**
- * Copyright 2024 dotX Automation s.r.l.
+ * Copyright 2026 Alexandru Cretu
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -50,9 +50,9 @@ struct Event
     y_px(y)
   {}
 
-  int64_t timestamp() const { return t_us; }
-  int16_t x() const { return x_px; }
-  int16_t y() const { return y_px; }
+  int64_t timestamp() const {return t_us;}
+  int16_t x() const {return x_px;}
+  int16_t y() const {return y_px;}
 };
 
 class EventStore
@@ -68,18 +68,18 @@ public:
   : events_(std::move(events))
   {}
 
-  bool isEmpty() const { return events_.empty(); }
-  std::size_t size() const { return events_.size(); }
+  bool isEmpty() const {return events_.empty();}
+  std::size_t size() const {return events_.size();}
 
-  iterator begin() { return events_.begin(); }
-  iterator end() { return events_.end(); }
-  const_iterator begin() const { return events_.begin(); }
-  const_iterator end() const { return events_.end(); }
+  iterator begin() {return events_.begin();}
+  iterator end() {return events_.end();}
+  const_iterator begin() const {return events_.begin();}
+  const_iterator end() const {return events_.end();}
 
-  const Event & front() const { return events_.front(); }
-  const Event & back() const { return events_.back(); }
+  const Event & front() const {return events_.front();}
+  const Event & back() const {return events_.back();}
 
-  void push_back(const Event & event) { events_.push_back(event); }
+  void push_back(const Event & event) {events_.push_back(event);}
 
   int64_t getLowestTime() const
   {

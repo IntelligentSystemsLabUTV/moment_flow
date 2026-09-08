@@ -1,12 +1,12 @@
 """
 Moment Flow launch file.
 
-dotX Automation s.r.l. <info@dotxautomation.com>
+Alexandru Cretu <alexandru.cretu@uniroma2.it>
 
 May 25, 2025
 """
 
-# Copyright 2024 dotX Automation s.r.l.
+# Copyright 2026 Alexandru Cretu
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -57,8 +57,8 @@ def generate_launch_description():
     container = ComposableNodeContainer(
         name="moment_flow_container",
         namespace=ns,
-        package="dua_app_management",
-        executable="dua_component_container_mt",
+        package="rclcpp_components",
+        executable="component_container_mt",
         emulate_tty=True,
         output='both',
         log_cmd=True,

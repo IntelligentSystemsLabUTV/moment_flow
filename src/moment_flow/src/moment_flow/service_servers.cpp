@@ -1,13 +1,13 @@
 /**
  * Moment Flow service servers implementation.
  *
- * dotX Automation s.r.l. <info@dotxautomation.com>
+ * Alexandru Cretu <alexandru.cretu@uniroma2.it>
  *
  * August 28, 2026
  */
 
 /**
- * Copyright 2024 dotX Automation s.r.l.
+ * Copyright 2026 Alexandru Cretu
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.

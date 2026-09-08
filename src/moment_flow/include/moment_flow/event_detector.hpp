@@ -1,13 +1,13 @@
 /**
  * Moment Flow node definition.
  *
- * dotX Automation s.r.l. <info@dotxautomation.com>
+ * Alexandru Cretu <alexandru.cretu@uniroma2.it>
  *
  * May 25, 2026
  */
 
 /**
- * Copyright 2024 dotX Automation s.r.l.
+ * Copyright 2026 Alexandru Cretu
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,6 +32,7 @@
 #include <deque>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -39,7 +40,6 @@
 #include <utility>
 #include <vector>
 
-#include <dua_node_cpp/dua_node.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 #include <Eigen/Core>
@@ -55,6 +55,7 @@
 
 #include <moment_flow/event_store.hpp>
 #include <moment_flow/moment_flow_solver.hpp>
+#include <moment_flow/parameter_manager.hpp>
 
 namespace moment_flow
 {
@@ -62,7 +63,7 @@ namespace moment_flow
 using EventPacket = event_camera_msgs::msg::EventPacket;
 using SetBool = std_srvs::srv::SetBool;
 
-class EventDetector : public dua_node::NodeBase
+class EventDetector : public rclcpp::Node
 {
 public:
   /**
@@ -77,12 +78,12 @@ public:
   ~EventDetector();
 
 private:
-  /* Init functions. */
-  void init_parameters() override;
-  void init_cgroups() override;
-  void init_publishers() override;
-  void init_subscribers() override;
-  void init_service_servers() override;
+  /* Init functions, called in this order by the constructor. */
+  void init_parameters();
+  void init_cgroups();
+  void init_publishers();
+  void init_subscribers();
+  void init_service_servers();
 
   /**
    * @brief Activates the node.
@@ -215,16 +216,16 @@ private:
    *
    * If a DSEC-style timestamp file is configured, saves are produced at the
    * ground-truth cadence and named by the DSEC image index. Each estimate still
-   * uses the ordinary flow_max_window_ms_ algorithm window at the start of the
+   * uses the ordinary max_window_ms_ algorithm window at the start of the
    * corresponding ground-truth interval. If no timestamp file is configured,
-   * saving falls back to every ordinary flow_max_window_ms_ window.
+   * saving falls back to every ordinary max_window_ms_ window.
    */
   void prepare_flow_saving();
 
   /**
    * @brief Processes one chunk using the DSEC benchmark-save schedule.
    *
-   * Splits incoming events so the estimator runs over flow_max_window_ms_ from
+   * Splits incoming events so the estimator runs over max_window_ms_ from
    * the start of each ground-truth interval, then skips ahead to the next
    * scheduled save. This keeps the algorithm window independent from the
    * ground-truth cadence.
@@ -239,7 +240,7 @@ private:
   /**
    * @brief Saves both the dense and event-sparse flow fields as DSEC PNGs.
    *
-   * Writes flow_dense to the "dense" subdirectory. When flow_events_enabled_
+   * Writes flow_dense to the "dense" subdirectory. When events_enabled_
    * is true, also writes flow_events to the "sparse" subdirectory.
    */
   void save_flow_results(
@@ -255,7 +256,7 @@ private:
    * duration, then encoded as RGB: flow_x, flow_y, valid. OpenCV writes BGR, so
    * the in-memory matrix uses B=valid, G=flow_y, R=flow_x. Non-finite pixels
    * (e.g. unsupported cells in flow_events) are written with valid=0. Files are
-   * written under flow_save_output_dir_/<subdir>.
+   * written under save_output_dir_/<subdir>.
    */
   void save_flow_png(
     const cv::Mat & flow_velocity,
@@ -296,7 +297,7 @@ private:
    * Accumulates into a vector, then sorts before handing it to the worker. */
   class EventStoreBuilder : public event_camera_codecs::EventProcessor
   {
-  public:
+public:
     EventStoreBuilder() = default;
 
     void eventCD(uint64_t sensor_time, uint16_t ex, uint16_t ey, uint8_t) override
@@ -307,7 +308,16 @@ private:
         static_cast<int16_t>(ey));
     }
 
+    // event_camera_codecs changed this hook from void to bool across releases;
+    // CMake probes the installed header and defines the macro accordingly. The
+    // bool tells the decoder whether to keep going, so it is always true: this
+    // node ignores external triggers, it does not want decoding to stop.
+#ifdef MOMENT_FLOW_EXT_TRIGGER_RETURNS_BOOL
+    bool eventExtTrigger(uint64_t, uint8_t, uint8_t) override {return true;}
+#else
     void eventExtTrigger(uint64_t, uint8_t, uint8_t) override {}
+#endif
+
     void finished() override {}
     void rawData(const char *, size_t) override {}
 
@@ -321,7 +331,7 @@ private:
       return EventStore(std::move(events_));
     }
 
-  private:
+private:
     std::vector<Event> events_;
   };
 
@@ -335,6 +345,9 @@ private:
     int width;
     int height;
   };
+
+  /* Parameters: declared with descriptors, mirrored into the members below. */
+  std::unique_ptr<ParameterManager> pmanager_;
 
   /* Callback Groups. */
   rclcpp::CallbackGroup::SharedPtr cgroup_enable_;
@@ -363,7 +376,7 @@ private:
   int64_t stream_high_us_{std::numeric_limits<int64_t>::lowest()};
 
   /* Optical-flow state. Events accumulate here until the time span reaches
-   * flow_max_window_ms_, at which point the moment-flow estimator solves the
+   * max_window_ms_, at which point the moment-flow estimator solves the
    * whole batch. */
   EventStore flow_accum_;
   int64_t flow_accum_first_us_{std::numeric_limits<int64_t>::max()};
@@ -389,40 +402,40 @@ private:
   /* Node parameters. */
   bool    autostart_;
   bool    iwe_enabled_;
-  bool    flow_enabled_;
-  bool    flow_events_enabled_;
+  bool    publish_flow_hsv_;
+  bool    events_enabled_;
   bool    debug_;
-  double  flow_max_window_ms_;
-  int64_t flow_max_solve_events_;
-  int64_t flow_num_threads_;
-  int64_t flow_num_scales_;
-  int64_t flow_cell_size_px_;
-  double  flow_cell_min_mass_;
-  double  flow_cell_min_lambda_;
-  double  flow_cell_max_residual_ratio_;
-  double  flow_tile_min_mass_;
-  int64_t flow_tile_min_cells_;
-  double  flow_tile_min_lambda_;
-  double  flow_aperture_ratio_;
-  double  flow_tikhonov_eps_;
-  double  flow_prior_lambda_;
-  double  flow_reg_lambda_;
-  int64_t flow_reg_sweeps_;
-  double  flow_reg_sigma_;
-  int64_t flow_smooth_sweeps_;
-  double  flow_smooth_beta_;
-  bool    flow_refine_enabled_;
-  int64_t flow_refine_iters_;
-  bool flow_track_enabled_;
-  int64_t flow_iwe_scale_;
-  double  flow_max_speed_px_s_;
-  bool flow_save_enabled_;
-  std::string flow_save_output_dir_;
-  std::string flow_save_timestamp_file_;
-  bool flow_save_clear_output_;
-  bool flow_save_gap_fill_;
-  int64_t flow_save_first_index_;
-  int64_t flow_save_index_step_;
+  double  max_window_ms_;
+  int64_t max_solve_events_;
+  int64_t num_threads_;
+  int64_t num_scales_;
+  int64_t cell_size_px_;
+  double  cell_min_mass_;
+  double  cell_min_lambda_;
+  double  cell_max_residual_ratio_;
+  double  tile_min_mass_;
+  int64_t tile_min_cells_;
+  double  tile_min_lambda_;
+  double  aperture_ratio_;
+  double  tikhonov_eps_;
+  double  prior_lambda_;
+  double  reg_lambda_;
+  int64_t reg_sweeps_;
+  double  reg_sigma_;
+  int64_t smooth_sweeps_;
+  double  smooth_beta_;
+  bool    refine_enabled_;
+  int64_t refine_iters_;
+  bool track_enabled_;
+  int64_t iwe_scale_;
+  double  max_speed_px_s_;
+  bool save_enabled_;
+  std::string save_output_dir_;
+  std::string save_timestamp_file_;
+  bool save_clear_output_;
+  bool save_gap_fill_;
+  int64_t save_first_index_;
+  int64_t save_index_step_;
   std::string timing_log_path_;
 
   /* End-to-end timing CSV log (open for the lifetime of one activation). */

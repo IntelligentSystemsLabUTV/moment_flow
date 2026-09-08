@@ -1,13 +1,13 @@
 /**
  * Moment Flow standalone application.
  *
- * dotX Automation s.r.l. <info@dotxautomation.com>
+ * Alexandru Cretu <alexandru.cretu@uniroma2.it>
  *
  * May 25, 2026
  */
 
 /**
- * Copyright 2024 dotX Automation s.r.l.
+ * Copyright 2026 Alexandru Cretu
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,42 +23,30 @@
  */
 
 #include <cstdlib>
-#include <csignal>
+#include <memory>
 
 #include <rclcpp/rclcpp.hpp>
 
-#include <ros2_app_manager/ros2_app_manager.hpp>
-#include <ros2_signal_handler/ros2_signal_handler.hpp>
-
 #include <moment_flow/event_detector.hpp>
-
-using dua_app_management::ROS2AppManager;
-using dua_app_management::SignalHandler;
 
 int main(int argc, char ** argv)
 {
-  ROS2AppManager<rclcpp::executors::MultiThreadedExecutor,
-    moment_flow::EventDetector> app_manager(
-    argc,
-    argv,
-    "moment_flow_app");
+  // rclcpp::init installs the SIGINT and SIGTERM handlers that break the spin
+  rclcpp::init(argc, argv);
 
-  SignalHandler & sig_handler = SignalHandler::get_global_signal_handler();
-  sig_handler.init(
-    app_manager.get_context(),
-    "moment_flow_app_signal_handler",
-    app_manager.get_executor());
-  sig_handler.install(SIGINT);
-  sig_handler.install(SIGTERM);
-  sig_handler.install(SIGQUIT);
-  sig_handler.ignore(SIGHUP);
-  sig_handler.ignore(SIGUSR1);
-  sig_handler.ignore(SIGUSR2);
+  auto node = std::make_shared<moment_flow::EventDetector>();
 
-  app_manager.run();
+  // One thread per callback group: the event-packet callback must not be held
+  // up by an enable request, and vice versa
+  rclcpp::executors::MultiThreadedExecutor executor;
+  executor.add_node(node);
+  executor.spin();
 
-  app_manager.shutdown();
-  sig_handler.fini();
+  // Destroy the node before shutting the context down, so its destructor can
+  // still join the worker thread and log
+  executor.remove_node(node);
+  node.reset();
 
-  exit(EXIT_SUCCESS);
+  rclcpp::shutdown();
+  return EXIT_SUCCESS;
 }

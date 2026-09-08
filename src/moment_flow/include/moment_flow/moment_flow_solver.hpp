@@ -1,13 +1,13 @@
 /**
  * Public API of the moment-based optical-flow estimator.
  *
- * dotX Automation s.r.l. <info@dotxautomation.com>
+ * Alexandru Cretu <alexandru.cretu@uniroma2.it>
  *
  * August 28, 2026
  */
 
 /**
- * Copyright 2024 dotX Automation s.r.l.
+ * Copyright 2026 Alexandru Cretu
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,7 +42,7 @@ struct Events
   std::vector<float> t;
   int64_t t_ref_us = 0;
 
-  size_t size() const { return x.size(); }
+  size_t size() const {return x.size();}
 };
 
 struct MomentFlowParams
@@ -58,9 +58,9 @@ struct MomentFlowParams
   float aperture_ratio = 0.05f;
   float tikhonov_eps = 1e-3f;
   float prior_lambda = 0.05f;
-  float flow_reg_lambda = 0.0f;
-  int flow_reg_sweeps = 0;
-  float flow_reg_sigma = 1e9f;
+  float reg_lambda = 0.0f;
+  int reg_sweeps = 0;
+  float reg_sigma = 1e9f;
   float max_speed_px_s = 4000.0f;
 };
 

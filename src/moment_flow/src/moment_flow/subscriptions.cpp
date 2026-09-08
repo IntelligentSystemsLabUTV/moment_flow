@@ -1,13 +1,13 @@
 /**
  * Moment Flow subscriptions implementation.
  *
- * dotX Automation s.r.l. <info@dotxautomation.com>
+ * Alexandru Cretu <alexandru.cretu@uniroma2.it>
  *
  * May 25, 2026
  */
 
 /**
- * Copyright 2024 dotX Automation s.r.l.
+ * Copyright 2026 Alexandru Cretu
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -63,12 +63,12 @@ void EventDetector::callback_event_packet(EventPacket::ConstSharedPtr msg)
 
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
-    if (!flow_save_enabled_ && queue_.size() >= kMaxQueueChunks) {
+    if (!save_enabled_ && queue_.size() >= kMaxQueueChunks) {
       queue_.pop_front();
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 2000,
         "Worker behind; dropping oldest event chunk");
-    } else if (flow_save_enabled_ && queue_.size() >= kMaxQueueChunks) {
+    } else if (save_enabled_ && queue_.size() >= kMaxQueueChunks) {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 2000,
         "Worker behind while raw-flow saving is enabled; "

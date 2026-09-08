@@ -8,13 +8,13 @@
  * output field follows the warp convention x' = x + t * F, with F[2*k] and
  * F[2*k+1] the two components of tile k.
  *
- * dotX Automation s.r.l. <info@dotxautomation.com>
+ * Alexandru Cretu <alexandru.cretu@uniroma2.it>
  *
  * August 28, 2026
  */
 
 /**
- * Copyright 2024 dotX Automation s.r.l.
+ * Copyright 2026 Alexandru Cretu
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -58,9 +58,9 @@ bool operator==(const MomentFlowParams & a, const MomentFlowParams & b)
          a.aperture_ratio == b.aperture_ratio &&
          a.tikhonov_eps == b.tikhonov_eps &&
          a.prior_lambda == b.prior_lambda &&
-         a.flow_reg_lambda == b.flow_reg_lambda &&
-         a.flow_reg_sweeps == b.flow_reg_sweeps &&
-         a.flow_reg_sigma == b.flow_reg_sigma &&
+         a.reg_lambda == b.reg_lambda &&
+         a.reg_sweeps == b.reg_sweeps &&
+         a.reg_sigma == b.reg_sigma &&
          a.max_speed_px_s == b.max_speed_px_s;
 }
 
@@ -128,25 +128,25 @@ public:
     return img_w_ == img_w && img_h_ == img_h && params_ == sanitize_params(params);
   }
 
-  int num_vars() const { return final_vars_; }
-  const MomentFlowProfile & profile() const { return profile_; }
+  int num_vars() const {return final_vars_;}
+  const MomentFlowProfile & profile() const {return profile_;}
 
   /// Runtime multiplier on prior_lambda for the next solve(s). Residual passes
   /// of the compositional refinement use a weaker prior so the warm-start pull
   /// does not damp the correction steps (which would leave a systematic
   /// magnitude deficit after few iterations).
-  void set_prior_scale(float s) { prior_scale_ = std::max(0.0f, s); }
+  void set_prior_scale(float s) {prior_scale_ = std::max(0.0f, s);}
 
   /// Runtime multiplier on the cell/tile mass gates. The gates are calibrated
   /// in raw event counts; when a busy window is strided down, scale them by
   /// the kept fraction so acceptance does not depend on the event rate.
-  void set_mass_scale(float s) { mass_scale_ = std::clamp(s, 1e-3f, 1.0f); }
+  void set_mass_scale(float s) {mass_scale_ = std::clamp(s, 1e-3f, 1.0f);}
 
   /// Threads for the per-event loops (accumulation, warping). 0 (the default)
   /// leaves the choice to the OpenMP runtime. Results do not depend on it: the
   /// work is partitioned so that every cell keeps the serial accumulation
   /// order, so any value yields bit-identical moments.
-  void set_max_threads(int t) { max_threads_ = std::max(0, t); }
+  void set_max_threads(int t) {max_threads_ = std::max(0, t);}
 
   void reset()
   {
@@ -465,9 +465,9 @@ private:
     p.aperture_ratio = std::clamp(p.aperture_ratio, 0.0f, 1.0f);
     p.tikhonov_eps = std::max(1e-12f, p.tikhonov_eps);
     p.prior_lambda = std::max(0.0f, p.prior_lambda);
-    p.flow_reg_lambda = std::max(0.0f, p.flow_reg_lambda);
-    p.flow_reg_sweeps = std::clamp(p.flow_reg_sweeps, 0, 16);
-    p.flow_reg_sigma = std::max(1e-6f, p.flow_reg_sigma);
+    p.reg_lambda = std::max(0.0f, p.reg_lambda);
+    p.reg_sweeps = std::clamp(p.reg_sweeps, 0, 16);
+    p.reg_sigma = std::max(1e-6f, p.reg_sigma);
     p.max_speed_px_s = std::max(1.0f, p.max_speed_px_s);
     return p;
   }
@@ -995,8 +995,8 @@ private:
         float lmin, lmax;
         eig2(a.mxx, a.mxy, a.myy, lmin, lmax);
         if (a.count < params_.tile_min_cells ||
-            a.rho < mass_scale_ * params_.tile_min_mass ||
-            !(lmax >= params_.tile_min_lambda))
+          a.rho < mass_scale_ * params_.tile_min_mass ||
+          !(lmax >= params_.tile_min_lambda))
         {
           out_F[2 * k] = fb_Fx;
           out_F[2 * k + 1] = fb_Fy;
@@ -1204,9 +1204,9 @@ private:
           const float ratio = lminM / std::max(lmaxM, 1e-12f);
           const float data_conf = 0.5f * (lminM + lmaxM);
           const float normal_w = data_conf;
-          const float tangent_w = aperture_limited
-            ? data_conf * std::max(0.0f, ratio)
-            : data_conf;
+          const float tangent_w = aperture_limited ?
+            data_conf * std::max(0.0f, ratio) :
+            data_conf;
           geom.confidence = data_conf;
           geom.data_mxx = normal_w * nx * nx + tangent_w * tgx * tgx;
           geom.data_mxy = normal_w * nx * ny + tangent_w * tgx * tgy;
@@ -1240,7 +1240,7 @@ private:
 
   float robust_coupling_psi(const Eigen::VectorXf & field, int k, int nk) const
   {
-    const float sigma = params_.flow_reg_sigma;
+    const float sigma = params_.reg_sigma;
     if (!(sigma < 1e8f)) {
       return 1.0f;
     }
@@ -1252,7 +1252,7 @@ private:
 
   void regularize_field_coupled(int tiles, Eigen::VectorXf & field)
   {
-    if (params_.flow_reg_lambda <= 0.0f || params_.flow_reg_sweeps <= 0 || tiles <= 1) {
+    if (params_.reg_lambda <= 0.0f || params_.reg_sweeps <= 0 || tiles <= 1) {
       return;
     }
 
@@ -1266,10 +1266,10 @@ private:
       smooth_scratch_[i] = field[i];
     }
 
-    const float lambda_s = params_.flow_reg_lambda;
+    const float lambda_s = params_.reg_lambda;
     profile_.reg_warped_geometry_tiles += n_tiles;
 
-    for (int sweep = 0; sweep < params_.flow_reg_sweeps; ++sweep) {
+    for (int sweep = 0; sweep < params_.reg_sweeps; ++sweep) {
       for (int ty = 0; ty < tiles; ++ty) {
         for (int tx = 0; tx < tiles; ++tx) {
           const int k = ty * tiles + tx;
@@ -1308,29 +1308,29 @@ private:
           float wt_sum = 0.0f;
 
           auto add_neighbor = [&](int nx, int ny) {
-            if (nx < 0 || ny < 0 || nx >= tiles || ny >= tiles) {
-              return;
-            }
-            const int nk = ny * tiles + nx;
-            const float conf = tile_data_confidence(nk);
-            if (!(conf > 0.0f)) {
-              return;
-            }
-            const float psi = robust_coupling_psi(field, k, nk);
-            const float w = lambda_s * conf * psi;
-            if (!(w > 0.0f) || !std::isfinite(w)) {
-              return;
-            }
-            // velocita' fisica del vicino (field = -v_phys) e sua proiezione tangenziale
-            const float vnx = -field[2 * nk];
-            const float vny = -field[2 * nk + 1];
-            const float proj = vnx * tgx + vny * tgy;
-            wt_sum += w;
-            Cxx += w * tgx * tgx;
-            Cxy += w * tgx * tgy;
-            Cyy += w * tgy * tgy;
-            rt += w * proj;
-          };
+              if (nx < 0 || ny < 0 || nx >= tiles || ny >= tiles) {
+                return;
+              }
+              const int nk = ny * tiles + nx;
+              const float conf = tile_data_confidence(nk);
+              if (!(conf > 0.0f)) {
+                return;
+              }
+              const float psi = robust_coupling_psi(field, k, nk);
+              const float w = lambda_s * conf * psi;
+              if (!(w > 0.0f) || !std::isfinite(w)) {
+                return;
+              }
+            // Neighbour physical velocity (field = -v_phys) and its tangential projection
+              const float vnx = -field[2 * nk];
+              const float vny = -field[2 * nk + 1];
+              const float proj = vnx * tgx + vny * tgy;
+              wt_sum += w;
+              Cxx += w * tgx * tgx;
+              Cxy += w * tgx * tgy;
+              Cyy += w * tgy * tgy;
+              rt += w * proj;
+            };
 
           add_neighbor(tx - 1, ty);
           add_neighbor(tx + 1, ty);
@@ -1341,7 +1341,8 @@ private:
             continue;
           }
 
-          // Normale: M_dato + tikhonov + prior (intatta). Tangenziale: + coupling.
+          // Normal direction: data M + Tikhonov + prior, left untouched.
+          // Tangential direction: the same terms plus the neighbour coupling.
           float vx_phys = -field[2 * k];
           float vy_phys = -field[2 * k + 1];
           const bool solved = solve2(
@@ -1377,9 +1378,9 @@ private:
     profile_.reg_total_tiles += n_tiles;
     profile_.reg_modified_tiles += modified;
     profile_.reg_mean_delta_speed =
-      (profile_.reg_total_tiles > 0)
-        ? (prev_sum + delta_sum) / static_cast<double>(profile_.reg_total_tiles)
-        : 0.0;
+      (profile_.reg_total_tiles > 0) ?
+      (prev_sum + delta_sum) / static_cast<double>(profile_.reg_total_tiles) :
+      0.0;
   }
 
   void sample_field(
@@ -1407,9 +1408,9 @@ private:
     const float w01 = (1.0f - fx) * fy;
     const float w11 = fx * fy;
     vx = w00 * F[2 * k00] + w10 * F[2 * k10] +
-         w01 * F[2 * k01] + w11 * F[2 * k11];
+      w01 * F[2 * k01] + w11 * F[2 * k11];
     vy = w00 * F[2 * k00 + 1] + w10 * F[2 * k10 + 1] +
-         w01 * F[2 * k01 + 1] + w11 * F[2 * k11 + 1];
+      w01 * F[2 * k01 + 1] + w11 * F[2 * k11 + 1];
   }
 
   void resample_field(
@@ -1465,15 +1466,15 @@ bool MomentFlow::compatible(
   return impl_->compatible(img_w, img_h, params);
 }
 
-int MomentFlow::num_vars() const { return impl_->num_vars(); }
+int MomentFlow::num_vars() const {return impl_->num_vars();}
 
-const MomentFlowProfile & MomentFlow::profile() const { return impl_->profile(); }
+const MomentFlowProfile & MomentFlow::profile() const {return impl_->profile();}
 
-void MomentFlow::set_prior_scale(float scale) { impl_->set_prior_scale(scale); }
-void MomentFlow::set_mass_scale(float scale) { impl_->set_mass_scale(scale); }
-void MomentFlow::set_max_threads(int threads) { impl_->set_max_threads(threads); }
-void MomentFlow::reset() { impl_->reset(); }
-void MomentFlow::ingest(const Events & events) { impl_->ingest(events); }
+void MomentFlow::set_prior_scale(float scale) {impl_->set_prior_scale(scale);}
+void MomentFlow::set_mass_scale(float scale) {impl_->set_mass_scale(scale);}
+void MomentFlow::set_max_threads(int threads) {impl_->set_max_threads(threads);}
+void MomentFlow::reset() {impl_->reset();}
+void MomentFlow::ingest(const Events & events) {impl_->ingest(events);}
 
 void MomentFlow::solve(
   const Eigen::VectorXf & warm_start, Eigen::VectorXf & output)

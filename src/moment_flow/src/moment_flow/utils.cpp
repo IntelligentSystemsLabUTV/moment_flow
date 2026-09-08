@@ -1,13 +1,13 @@
 /**
  * Moment Flow utils implementation.
  *
- * dotX Automation s.r.l. <info@dotxautomation.com>
+ * Alexandru Cretu <alexandru.cretu@uniroma2.it>
  *
  * May 28, 2025
  */
 
 /**
- * Copyright 2024 dotX Automation s.r.l.
+ * Copyright 2026 Alexandru Cretu
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,6 +30,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -38,9 +39,9 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
-#include <dua_cv_bridge/dua_cv_bridge.hpp>
 #include <opencv2/imgcodecs.hpp>
 
 namespace moment_flow
@@ -216,11 +217,11 @@ void EventDetector::prepare_flow_saving()
   flow_save_prev_estimate_end_us_ = -1;
   flow_save_prepared_ = false;
 
-  if (!flow_save_enabled_) {
+  if (!save_enabled_) {
     return;
   }
 
-  const std::filesystem::path output_dir(flow_save_output_dir_);
+  const std::filesystem::path output_dir(save_output_dir_);
   std::error_code ec;
   // Dense (flow_dense) and sparse (flow_events) predictions go into separate
   // subdirectories so both benchmarks can run from a single node run.
@@ -236,7 +237,7 @@ void EventDetector::prepare_flow_saving()
     }
   }
 
-  if (flow_save_clear_output_) {
+  if (save_clear_output_) {
     for (const auto & dir : {output_dir / "dense", output_dir / "sparse"}) {
       for (const auto & entry : std::filesystem::directory_iterator(dir, ec)) {
         if (ec) {
@@ -259,17 +260,17 @@ void EventDetector::prepare_flow_saving()
     }
   }
 
-  if (!flow_save_timestamp_file_.empty()) {
-    std::ifstream file(flow_save_timestamp_file_);
+  if (!save_timestamp_file_.empty()) {
+    std::ifstream file(save_timestamp_file_);
     if (!file.is_open()) {
       RCLCPP_ERROR(
         get_logger(), "Could not open flow save timestamp file '%s'",
-        flow_save_timestamp_file_.c_str());
+        save_timestamp_file_.c_str());
       return;
     }
 
     std::string line;
-    int64_t implicit_index = flow_save_first_index_;
+    int64_t implicit_index = save_first_index_;
     while (std::getline(file, line)) {
       line = trim(line);
       if (line.empty() || line[0] == '#') {
@@ -299,7 +300,7 @@ void EventDetector::prepare_flow_saving()
 
       const int64_t file_index = (fields.size() >= 3) ? fields[2] : implicit_index;
       flow_save_windows_.push_back({from_us, to_us, file_index});
-      implicit_index += flow_save_index_step_;
+      implicit_index += save_index_step_;
     }
 
     std::sort(
@@ -324,11 +325,11 @@ void EventDetector::prepare_flow_saving()
       get_logger(),
       "Raw flow saving enabled without a timestamp schedule; saving ordinary "
       "%.3f ms flow windows to '%s'",
-      flow_max_window_ms_, flow_save_output_dir_.c_str());
+      max_window_ms_, save_output_dir_.c_str());
   } else {
     RCLCPP_INFO(
       get_logger(), "Raw flow saving enabled: %zu scheduled windows -> '%s'",
-      flow_save_windows_.size(), flow_save_output_dir_.c_str());
+      flow_save_windows_.size(), save_output_dir_.c_str());
   }
 }
 
@@ -341,7 +342,7 @@ void EventDetector::save_flow_results(
   // Dense keeps its original behavior on degenerate windows (all-valid zeros);
   // only the sparse field treats a missing estimate as invalid.
   save_flow_png(res.flow_dense, "dense", /*empty_is_invalid=*/false, file_index, from_us, to_us);
-  if (flow_events_enabled_) {
+  if (events_enabled_) {
     save_flow_png(res.flow_events, "sparse", /*empty_is_invalid=*/true, file_index, from_us, to_us);
   }
 }
@@ -354,7 +355,7 @@ void EventDetector::save_flow_png(
   int64_t from_us,
   int64_t to_us)
 {
-  if (!flow_save_enabled_ || !flow_save_prepared_) {
+  if (!save_enabled_ || !flow_save_prepared_) {
     return;
   }
   if (to_us <= from_us) {
@@ -415,7 +416,7 @@ void EventDetector::save_flow_png(
   std::ostringstream name;
   name << std::setw(6) << std::setfill('0') << file_index << ".png";
   const std::filesystem::path output_path =
-    std::filesystem::path(flow_save_output_dir_) / subdir / name.str();
+    std::filesystem::path(save_output_dir_) / subdir / name.str();
 
   if (!cv::imwrite(output_path.string(), encoded)) {
     RCLCPP_ERROR(get_logger(), "Could not write raw flow PNG '%s'", output_path.string().c_str());
@@ -438,9 +439,31 @@ void EventDetector::publish_image(
   if (img.empty()) {
     return;
   }
-  auto msg = dua_cv_bridge::frame_to_msg(img, encoding);
-  msg->header = header;
-  pub->publish(*msg);
+
+  // Packed directly instead of through cv_bridge: the conversion is a copy of
+  // rows that are already in the ROS memory layout, and it keeps the package
+  // free of the vision_opencv dependency.
+  sensor_msgs::msg::Image msg;
+  msg.header = header;
+  msg.height = static_cast<uint32_t>(img.rows);
+  msg.width = static_cast<uint32_t>(img.cols);
+  msg.encoding = encoding;
+  msg.is_bigendian = 0;
+  msg.step = static_cast<uint32_t>(img.cols * img.elemSize());
+  msg.data.resize(static_cast<std::size_t>(msg.step) * img.rows);
+
+  if (img.isContinuous()) {
+    std::memcpy(msg.data.data(), img.data, msg.data.size());
+  } else {
+    for (int row = 0; row < img.rows; ++row) {
+      std::memcpy(
+        msg.data.data() + static_cast<std::size_t>(row) * msg.step,
+        img.ptr(row),
+        msg.step);
+    }
+  }
+
+  pub->publish(std::move(msg));
 }
 
 } // namespace moment_flow
