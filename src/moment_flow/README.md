@@ -8,6 +8,16 @@ The user-facing documentation — results, dependencies, build, node interface, 
 
 The estimator and the node are deliberately separate. `moment_flow::flow::MomentFlow` is a plain class that never touches the ROS graph; `moment_flow::EventDetector` owns it and does all the ROS work.
 
+<p align="center">
+  <img src="../../docs/img/pipeline.png" alt="MomentFlow estimator data flow" width="740"/>
+</p>
+
+<p align="center">
+  <em>Data flow inside the estimator. The pyramid sweep runs over <code>pyramid_levels</code> levels and
+  the re-warping loop over at most <code>refine_iters</code> iterations; the tracked field is the state
+  carried across windows.</em>
+</p>
+
 | File | Concern |
 | --- | --- |
 | `include/moment_flow/moment_flow_solver.hpp` | solver API: `Events`, `MomentFlowParams`, `MomentFlowProfile`, `MomentFlow` (pimpl) |

@@ -226,6 +226,15 @@ window has been formed:
 | `refine_iters: 4` (reported) | 2.849 | 167.92 | 272.05 | 7.1% |
 | `refine_iters: 1` (reduced) | 3.118 | 78.01 | 129.46 | 71.5% |
 
+<p align="center">
+  <img src="docs/img/runtime_jetson.png" alt="Per-stage runtime distributions on Jetson AGX Orin" width="880"/>
+</p>
+
+<p align="center">
+  <em>Per-stage compute time for the two configurations, log scale. Boxes span the interquartile range,
+  whiskers the 5th and 95th percentiles over timed windows; the dashed line is the 100 ms budget.</em>
+</p>
+
 The refinement budget dominates: its median cost falls from 119.76 ms to 30.17 ms between the two.
 **The reported configuration does not meet a 100 ms budget on this profile**, and the reduced one meets it
 on 71.5% of windows: embedded suitability is workload dependent, and the subset is deliberately
