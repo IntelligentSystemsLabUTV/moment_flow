@@ -1,0 +1,30 @@
+/dsec_publisher:
+  ros__parameters:
+    events_h5: "logs/dsec/zurich_city_10_a/events_left/events.h5"
+    topic: "event_camera/events"
+    width: 640
+    height: 480
+    window_ms: 10.0
+    realtime_factor: 1.0
+    loop: false
+    start_offset_s: 0.0
+    wait_for_subscribers: true     # hold the replay until consumers are matched: publishing before discovery completes silently drops the first windows and makes runs irreproducible
+    subscriber_settle_ms: 200.0    # extra settle time after the first match, so every endpoint of the consumer process is matched before the first window
+    frame_id: "camera_0"
+    reliable: true
+    qos_depth: 5000
+    publish_imu: true
+    imu_topic: "imu/data"
+    imu_bag_topic: "/imu/data"
+    imu_bag: ""
+    lidar_imu_root: ""
+    imu_frame_id: "imu0"
+    publish_tf: true
+    lidar_frame_id: "lidar"
+    cam_to_imu_yaml: ""
+    cam_to_lidar_yaml: ""
+    cam_to_cam_yaml: ""
+    publish_lidar: true
+    lidar_topic: "lidar/points"
+    lidar_bag_topic: "/velodyne_points"
+    lidar_bag: ""

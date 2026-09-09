@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>moment_flow</name>
+  <version>1.0.0</version>
+  <description>Event-based dense optical flow from spatio-temporal moments.</description>
+  <maintainer email="alexandru.cretu@uniroma2.it">Alexandru Cretu</maintainer>
+  <license>Apache-2.0</license>
+  <author email="alexandru.cretu@uniroma2.it">Alexandru Cretu</author>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>eigen</depend>
+  <build_depend>eigen3_cmake_module</build_depend>
+  <buildtool_export_depend>eigen3_cmake_module</buildtool_export_depend>
+  <depend>event_camera_codecs</depend>
+  <depend>event_camera_msgs</depend>
+  <depend>libopencv-dev</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_components</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
