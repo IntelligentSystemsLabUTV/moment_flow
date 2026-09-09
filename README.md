@@ -1,16 +1,14 @@
-# MomentFlow: Dense Optical Flow from Spatio-Temporal Moments
+# MomentFlow: Event-Based Optical Flow Using Incremental Spatio-Temporal Moments as an Event-Alignment Surrogate
 
 <p align="center">
   <img src="https://img.shields.io/badge/ROS%202-Jazzy-22314E?logo=ros&logoColor=white" alt="ROS 2 Jazzy">
   <img src="https://img.shields.io/badge/C%2B%2B-17-00599C?logo=cplusplus&logoColor=white" alt="C++17">
-  <img src="https://img.shields.io/badge/training-free-brightgreen" alt="Training-free">
-  <img src="https://img.shields.io/badge/DSEC--Flow%20test%20EPE-2.878%20px-blue" alt="DSEC-Flow test EPE">
   <a href="https://github.com/IntelligentSystemsLabUTV/moment_flow/releases/latest"><img src="https://img.shields.io/github/v/release/IntelligentSystemsLabUTV/moment_flow" alt="GitHub release"></a>
   <a href="https://github.com/IntelligentSystemsLabUTV/moment_flow/blob/master/LICENSE"><img src="https://img.shields.io/github/license/IntelligentSystemsLabUTV/moment_flow" alt="License"></a>
 </p>
 
 <p align="center">
-  Training-free event-based optical flow, from spatio-temporal moments instead of iterative contrast maximization.
+  Reference implementation as a ROS 2 node.
 </p>
 
 <p align="center">
@@ -24,7 +22,7 @@
 MomentFlow summarizes each window of events with local first- and second-order moments on a fixed cell
 grid, extracts one normal-flow constraint per cell in closed form, and fuses those constraints over a
 coarse-to-fine tile pyramid. There is no learned component and no dataset-specific weight. On the
-official DSEC-Flow test split it reaches **2.878 px** endpoint error, improving on the full
+official [DSEC](https://dsec.ifi.uzh.ch/)-Flow test split it reaches **2.878 px** endpoint error, improving on the full
 contrast-maximization reference MultiCM on every reported aggregate metric.
 
 This repository provides the reference C++/ROS 2 implementation, the parameter file of the reported
@@ -32,12 +30,11 @@ configuration, and the evaluation, ablation and submission tooling behind the pa
 MomentFlow should cite:
 
 ```bibtex
-@article{cretu2026momentflow,
+@unpublished{cretu2026momentflow,
   title   = {MomentFlow: Event-Based Optical Flow Using Incremental Spatio-Temporal
              Moments as an Event-Alignment Surrogate},
   author  = {Cretu, Alexandru and Farmani, Jaleh and Tenaglia, Alessandro and
              Masocco, Roberto and Mattogno, Simone and Carnevale, Daniele},
-  journal = {Sensors},
   year    = {2026},
   note    = {Submitted}
 }
@@ -209,12 +206,16 @@ estimates as DSEC-format 16-bit PNG files, which is how the benchmark submission
 | Split | EPE (px) | AE (deg) |
 | --- | --- | --- |
 | Training, 18 sequences | 2.696 | 11.925 |
-| Test, official DSEC server | **2.878** | **9.787** |
+| [Test, official DSEC server](https://dsec.ifi.uzh.ch/uzh/dsec-flow-optical-flow-benchmark/momentflow-optim/) | **2.878** | **9.787** |
 
 On the test split the outlier rates are 68.731% (1PE), 40.123% (2PE) and 25.238% (3PE). Against MultiCM
 this improves every reported aggregate metric, and EPE on all seven test sequences: 2.878 px against
 3.472 px, 9.787 against 13.983 degrees. Among the `optim`-class entries nearest this operating point it
-places second by EPE, behind ERTFlow (2.086 px).
+places second by EPE, behind ERTFlow (2.086 px). The ranking is a moving target: see the
+[DSEC-Flow leaderboard](https://dsec.ifi.uzh.ch/uzh/dsec-flow-optical-flow-benchmark/) for the
+current standings, and the
+[MomentFlow entry](https://dsec.ifi.uzh.ch/uzh/dsec-flow-optical-flow-benchmark/momentflow-optim/)
+for the per-sequence breakdown.
 
 **Runtime.** On a Jetson AGX Orin (L4T 36.4.4, 50 W, `jetson_clocks` disabled), CPU/OpenMP only, over the
 five-sequence subset used for the sensitivity analysis. End-to-end time is measured after the event
